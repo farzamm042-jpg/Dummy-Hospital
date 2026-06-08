@@ -1,221 +1,178 @@
-from sqlalchemy import (
-    create_engine,
-    Column,
-    Integer,
-    String,
-    DateTime
-)
+import gspread
+import json
+import os
 
-from sqlalchemy.orm import (
-    declarative_base,
-    sessionmaker
-)
-
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-# =========================
-# DATABASE CONFIG
-# =========================
+# ================= GOOGLE SHEETS =================
 
-DATABASE_URL = "sqlite:///./hospital.db"
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}
+# Railway Environment Variable
+creds_dict = json.loads(
+    os.environ["GOOGLE_CREDENTIALS"]
 )
 
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
+creds = Credentials.from_service_account_info(
+    creds_dict,
+    scopes=SCOPES
 )
 
-Base = declarative_base()
+client = gspread.authorize(creds)
 
-# =========================
-# DOCTORS TABLE
-# =========================
+# Google Sheet Name
+sheet = client.open("hospital_db")
 
-class Doctor(Base):
-    __tablename__ = "doctors"
+# Worksheets
+doctors_sheet = sheet.worksheet("Doctors")
+appointments_sheet = sheet.worksheet("Appointments")
 
-    id = Column(
-        Integer,
-        primary_key=True,
-        index=True
-    )
+# ================= HELPERS =================
 
-    name = Column(
-        String,
-        nullable=False
-    )
+def now():
+    return datetime.utcnow().isoformat()
 
-    specialty = Column(
-        String,
-        nullable=False
-    )
 
-    days = Column(
-        String,
-        nullable=False
-    )
+def next_id(sheet_obj):
 
-    start_time = Column(
-        String,
-        nullable=False
-    )
+    records = sheet_obj.get_all_records()
 
-    end_time = Column(
-        String,
-        nullable=False
-    )
+    if not records:
+        return 1
 
-    fee = Column(
-        Integer,
-        nullable=False
-    )
+    ids = []
 
-    created_at = Column(
-        DateTime,
-        default=datetime.utcnow
-    )
+    for r in records:
 
-# =========================
-# APPOINTMENTS TABLE
-# =========================
+        try:
+            ids.append(int(r.get("id", 0)))
 
-class Appointment(Base):
-    __tablename__ = "appointments"
+        except:
+            pass
 
-    id = Column(
-        Integer,
-        primary_key=True,
-        index=True
-    )
+    return max(ids) + 1 if ids else 1
 
-    patient_name = Column(
-        String,
-        nullable=False
-    )
+# ================= DOCTORS =================
 
-    phone = Column(
-        String,
-        nullable=False
-    )
+def get_doctors():
 
-    reason = Column(
-        String,
-        nullable=False
-    )
+    return doctors_sheet.get_all_records()
 
-    doctor = Column(
-        String,
-        nullable=False
-    )
 
-    date = Column(
-        String,
-        nullable=False
-    )
+def add_doctor(data):
 
-    time = Column(
-        String,
-        nullable=False
-    )
+    doctors_sheet.append_row([
+        next_id(doctors_sheet),
+        data.get("name", ""),
+        data.get("specialty", ""),
+        data.get("days", ""),
+        data.get("start_time", ""),
+        data.get("end_time", ""),
+        data.get("fee", ""),
+        now()
+    ])
 
-    status = Column(
-        String,
-        default="Booked"
-    )
 
-    created_at = Column(
-        DateTime,
-        default=datetime.utcnow
-    )
+def delete_doctor(name):
 
-# =========================
-# DATABASE SESSION
-# =========================
+    rows = doctors_sheet.get_all_records()
 
-def get_db():
-    db = SessionLocal()
+    for i, r in enumerate(rows):
 
-    try:
-        yield db
+        if r.get("name") == name:
 
-    finally:
-        db.close()
+            doctors_sheet.delete_rows(i + 2)
 
-# =========================
-# CREATE TABLES
-# =========================
+            return True
 
-Base.metadata.create_all(
-    bind=engine
-)
+    return False
 
-# =========================
-# DEFAULT DOCTORS
-# =========================
+# ================= APPOINTMENTS =================
 
-def seed_doctors():
+def get_appointments():
 
-    db = SessionLocal()
+    return appointments_sheet.get_all_records()
 
-    try:
 
-        existing = db.query(
-            Doctor
-        ).count()
+def add_appointment(data):
 
-        if existing == 0:
+    print("ADDING APPOINTMENT:", data)
 
-            doctors = [
+    appointments_sheet.append_row([
+        next_id(appointments_sheet),
+        data.get("patient_name", ""),
+        data.get("phone", ""),
+        data.get("reason", ""),
+        data.get("doctor", ""),
+        data.get("date", ""),
+        data.get("time", ""),
+        "Booked",
+        now()
+    ])
 
-                Doctor(
-                    name="Dr Sara Ali",
-                    specialty="Cardiologist",
-                    days="Monday-Friday",
-                    start_time="09:00 AM",
-                    end_time="03:00 PM",
-                    fee=500
-                ),
+    print("APPOINTMENT SAVED")
 
-                Doctor(
-                    name="Dr Ahmed Khan",
-                    specialty="General Physician",
-                    days="Monday-Saturday",
-                    start_time="10:00 AM",
-                    end_time="05:00 PM",
-                    fee=300
-                ),
 
-                Doctor(
-                    name="Dr Bilal Farooq",
-                    specialty="Dermatologist",
-                    days="Monday-Friday",
-                    start_time="11:00 AM",
-                    end_time="06:00 PM",
-                    fee=700
-                )
+def cancel_appointment(name, phone):
 
-            ]
+    rows = appointments_sheet.get_all_records()
 
-            db.add_all(
-                doctors
+    for i, r in enumerate(rows):
+
+        if (
+            r.get("patient_name") == name
+            and r.get("phone") == phone
+        ):
+
+            appointments_sheet.update_cell(
+                i + 2,
+                8,
+                "Cancelled"
             )
 
-            db.commit()
+            return True
 
-            print(
-                "Default doctors inserted successfully."
+    return False
+
+
+def reschedule_appointment(
+    name,
+    phone,
+    new_date,
+    new_time
+):
+
+    rows = appointments_sheet.get_all_records()
+
+    for i, r in enumerate(rows):
+
+        if (
+            r.get("patient_name") == name
+            and r.get("phone") == phone
+        ):
+
+            appointments_sheet.update_cell(
+                i + 2,
+                6,
+                new_date
             )
 
-    finally:
-        db.close()
+            appointments_sheet.update_cell(
+                i + 2,
+                7,
+                new_time
+            )
 
-# =========================
-# AUTO INSERT DOCTORS
-# =========================
+            appointments_sheet.update_cell(
+                i + 2,
+                8,
+                "Rescheduled"
+            )
 
-seed_doctors()
+            return True
+
+    return False
