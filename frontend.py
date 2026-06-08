@@ -2,280 +2,265 @@ import streamlit as st
 import requests
 import pandas as pd
 
-API_URL = "https://dummy-hospital-ai-production.up.railway.app"
+# ================= API =================
+
+API_URL = "https://dummy-hospital-production.up.railway.app"
+
+# ================= PAGE =================
 
 st.set_page_config(
-    page_title="Dummy Hospital Dashboard",
+    page_title="Hospital Dashboard",
     page_icon="🏥",
     layout="wide"
 )
 
-st.title("🏥 Dummy Hospital Dashboard")
+st.title("🏥 Hospital Dashboard")
 
-menu = st.sidebar.radio(
-    "Navigation",
-    [
-        "Dashboard",
-        "Book Appointment",
-        "Check Availability",
-        "Cancel Appointment",
-        "Reschedule Appointment",
-        "Doctors",
-        "Appointments"
-    ]
-)
+# ================= HELPERS =================
 
-# ======================
-# DASHBOARD
-# ======================
+def safe_get(url):
 
-if menu == "Dashboard":
+    try:
+        return requests.get(url).json()
 
-    st.header("Dashboard")
+    except:
+        return []
+
+
+def safe_post(url, payload):
 
     try:
 
-        appointments = requests.get(
-            f"{API_URL}/get_appointments"
-        ).json()
-
-        doctors = requests.get(
-            f"{API_URL}/get_doctors"
-        ).json()
-
-        total_appointments = len(appointments)
-        total_doctors = len(doctors)
-
-        booked = len([
-            x for x in appointments
-            if x["status"] == "Booked"
-        ])
-
-        cancelled = len([
-            x for x in appointments
-            if x["status"] == "Cancelled"
-        ])
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        col1.metric(
-            "Doctors",
-            total_doctors
-        )
-
-        col2.metric(
-            "Appointments",
-            total_appointments
-        )
-
-        col3.metric(
-            "Booked",
-            booked
-        )
-
-        col4.metric(
-            "Cancelled",
-            cancelled
-        )
-
-    except:
-        st.error("Backend not connected")
-
-# ======================
-# BOOK APPOINTMENT
-# ======================
-
-elif menu == "Book Appointment":
-
-    st.header("Book Appointment")
-
-    doctors = requests.get(
-        f"{API_URL}/get_doctors"
-    ).json()
-
-    doctor_names = [
-        d["name"]
-        for d in doctors
-    ]
-
-    patient_name = st.text_input(
-        "Patient Name"
-    )
-
-    phone = st.text_input(
-        "Phone Number"
-    )
-
-    reason = st.text_input(
-        "Reason"
-    )
-
-    doctor = st.selectbox(
-        "Doctor",
-        doctor_names
-    )
-
-    date = st.date_input(
-        "Appointment Date"
-    )
-
-    time = st.selectbox(
-        "Time",
-        [
-            "09:00 AM",
-            "09:15 AM",
-            "09:30 AM",
-            "09:45 AM",
-            "10:00 AM",
-            "10:15 AM",
-            "10:30 AM",
-            "10:45 AM",
-            "11:00 AM",
-            "11:15 AM",
-            "11:30 AM"
-        ]
-    )
-
-    if st.button("Book"):
-
-        payload = {
-            "patient_name": patient_name,
-            "phone": phone,
-            "reason": reason,
-            "doctor": doctor,
-            "date": str(date),
-            "time": time
-        }
-
         response = requests.post(
-            f"{API_URL}/book_appointment",
+            url,
             json=payload
         )
 
-        st.success(
-            response.json()["message"]
+        return response.json()
+
+    except Exception as e:
+
+        return {
+            "message": str(e)
+        }
+
+# ================= MENU =================
+
+menu = st.sidebar.radio(
+    "Menu",
+    [
+        "Dashboard",
+        "Doctors",
+        "Add Doctor",
+        "Delete Doctor",
+        "Appointments",
+        "Book Appointment",
+        "Cancel Appointment",
+        "Reschedule Appointment"
+    ]
+)
+
+# ================= DASHBOARD =================
+
+if menu == "Dashboard":
+
+    doctors = safe_get(
+        f"{API_URL}/get_doctors"
+    )
+
+    appointments = safe_get(
+        f"{API_URL}/get_appointments"
+    )
+
+    col1, col2 = st.columns(2)
+
+    col1.metric(
+        "Doctors",
+        len(doctors)
+    )
+
+    col2.metric(
+        "Appointments",
+        len(appointments)
+    )
+
+# ================= DOCTORS =================
+
+elif menu == "Doctors":
+
+    doctors = safe_get(
+        f"{API_URL}/get_doctors"
+    )
+
+    st.dataframe(
+        pd.DataFrame(doctors)
+    )
+
+# ================= ADD DOCTOR =================
+
+elif menu == "Add Doctor":
+
+    name = st.text_input("Doctor Name")
+
+    specialty = st.text_input("Specialty")
+
+    days = st.text_input("Days")
+
+    start_time = st.text_input("Start Time")
+
+    end_time = st.text_input("End Time")
+
+    fee = st.number_input(
+        "Fee",
+        min_value=0
+    )
+
+    if st.button("Add Doctor"):
+
+        response = safe_post(
+            f"{API_URL}/add_doctor",
+            {
+                "name": name,
+                "specialty": specialty,
+                "days": days,
+                "start_time": start_time,
+                "end_time": end_time,
+                "fee": int(fee)
+            }
         )
 
-# ======================
-# CHECK AVAILABILITY
-# ======================
+        st.success(
+            response.get("message")
+        )
 
-elif menu == "Check Availability":
+# ================= DELETE DOCTOR =================
 
-    st.header("Check Availability")
+elif menu == "Delete Doctor":
 
-    doctors = requests.get(
+    doctors = safe_get(
         f"{API_URL}/get_doctors"
-    ).json()
+    )
 
     doctor_names = [
-        d["name"]
+        d.get("name")
         for d in doctors
     ]
+
+    doctor = st.selectbox(
+        "Select Doctor",
+        doctor_names
+    )
+
+    if st.button("Delete Doctor"):
+
+        response = safe_post(
+            f"{API_URL}/delete_doctor",
+            {
+                "name": doctor
+            }
+        )
+
+        st.success(
+            response.get("message")
+        )
+
+# ================= APPOINTMENTS =================
+
+elif menu == "Appointments":
+
+    appointments = safe_get(
+        f"{API_URL}/get_appointments"
+    )
+
+    st.dataframe(
+        pd.DataFrame(appointments)
+    )
+
+# ================= BOOK APPOINTMENT =================
+
+elif menu == "Book Appointment":
+
+    doctors = safe_get(
+        f"{API_URL}/get_doctors"
+    )
+
+    doctor_names = [
+        d.get("name")
+        for d in doctors
+    ]
+
+    patient_name = st.text_input("Patient Name")
+
+    phone = st.text_input("Phone")
+
+    reason = st.text_input("Reason")
 
     doctor = st.selectbox(
         "Doctor",
         doctor_names
     )
 
-    date = st.date_input(
-        "Date"
-    )
+    date = st.date_input("Date")
 
-    if st.button(
-        "Check Slots"
-    ):
+    time = st.text_input("Time")
 
-        response = requests.post(
-            f"{API_URL}/check_availability",
-            json={
+    if st.button("Book Appointment"):
+
+        response = safe_post(
+            f"{API_URL}/book_appointment",
+            {
+                "patient_name": patient_name,
+                "phone": phone,
+                "reason": reason,
                 "doctor": doctor,
-                "date": str(date)
+                "date": str(date),
+                "time": time
             }
         )
 
-        st.json(
-            response.json()
+        st.success(
+            response.get("message")
         )
 
-# ======================
-# CANCEL APPOINTMENT
-# ======================
+# ================= CANCEL =================
 
 elif menu == "Cancel Appointment":
 
-    st.header(
-        "Cancel Appointment"
-    )
+    patient_name = st.text_input("Patient Name")
 
-    patient_name = st.text_input(
-        "Patient Name"
-    )
+    phone = st.text_input("Phone")
 
-    phone = st.text_input(
-        "Phone Number"
-    )
+    if st.button("Cancel"):
 
-    if st.button(
-        "Cancel Appointment"
-    ):
-
-        response = requests.post(
+        response = safe_post(
             f"{API_URL}/cancel_appointment",
-            json={
+            {
                 "patient_name": patient_name,
                 "phone": phone
             }
         )
 
         st.success(
-            response.json()["message"]
+            response.get("message")
         )
 
-# ======================
-# RESCHEDULE
-# ======================
+# ================= RESCHEDULE =================
 
 elif menu == "Reschedule Appointment":
 
-    st.header(
-        "Reschedule Appointment"
-    )
+    patient_name = st.text_input("Patient Name")
 
-    patient_name = st.text_input(
-        "Patient Name"
-    )
+    phone = st.text_input("Phone")
 
-    phone = st.text_input(
-        "Phone Number"
-    )
+    new_date = st.date_input("New Date")
 
-    new_date = st.date_input(
-        "New Date"
-    )
+    new_time = st.text_input("New Time")
 
-    new_time = st.selectbox(
-        "New Time",
-        [
-            "09:00 AM",
-            "09:15 AM",
-            "09:30 AM",
-            "09:45 AM",
-            "10:00 AM",
-            "10:15 AM",
-            "10:30 AM",
-            "10:45 AM",
-            "11:00 AM"
-        ]
-    )
+    if st.button("Reschedule"):
 
-    if st.button(
-        "Reschedule"
-    ):
-
-        response = requests.post(
+        response = safe_post(
             f"{API_URL}/reschedule_appointment",
-            json={
+            {
                 "patient_name": patient_name,
                 "phone": phone,
                 "new_date": str(new_date),
@@ -284,101 +269,5 @@ elif menu == "Reschedule Appointment":
         )
 
         st.success(
-            response.json()["message"]
+            response.get("message")
         )
-
-# ======================
-# DOCTORS
-# ======================
-
-elif menu == "Doctors":
-
-    st.header("Doctors")
-
-    tab1, tab2 = st.tabs(
-        [
-            "View Doctors",
-            "Add Doctor"
-        ]
-    )
-
-    with tab1:
-
-        doctors = requests.get(
-            f"{API_URL}/get_doctors"
-        ).json()
-
-        st.dataframe(
-            pd.DataFrame(doctors),
-            use_container_width=True
-        )
-
-    with tab2:
-
-        name = st.text_input(
-            "Doctor Name"
-        )
-
-        specialty = st.text_input(
-            "Specialty"
-        )
-
-        days = st.text_input(
-            "Days"
-        )
-
-        start_time = st.text_input(
-            "Start Time"
-        )
-
-        end_time = st.text_input(
-            "End Time"
-        )
-
-        fee = st.number_input(
-            "Fee",
-            min_value=0
-        )
-
-        if st.button(
-            "Add Doctor"
-        ):
-
-            response = requests.post(
-                f"{API_URL}/add_doctor",
-                json={
-                    "name": name,
-                    "specialty": specialty,
-                    "days": days,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "fee": int(fee)
-                }
-            )
-
-            st.success(
-                response.json()["message"]
-            )
-
-# ======================
-# APPOINTMENTS
-# ======================
-
-elif menu == "Appointments":
-
-    st.header(
-        "Appointments"
-    )
-
-    appointments = requests.get(
-        f"{API_URL}/get_appointments"
-    ).json()
-
-    df = pd.DataFrame(
-        appointments
-    )
-
-    st.dataframe(
-        df,
-        use_container_width=True
-    )
