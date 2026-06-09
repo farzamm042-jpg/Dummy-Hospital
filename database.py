@@ -12,7 +12,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-# Railway Environment Variable
 creds_dict = json.loads(
     os.environ["GOOGLE_CREDENTIALS"]
 )
@@ -24,10 +23,8 @@ creds = Credentials.from_service_account_info(
 
 client = gspread.authorize(creds)
 
-# Google Sheet Name
 sheet = client.open("hospital_db")
 
-# Worksheets
 doctors_sheet = sheet.worksheet("Doctors")
 appointments_sheet = sheet.worksheet("Appointments")
 
@@ -38,7 +35,6 @@ def now():
 
 
 def next_id(sheet_obj):
-
     records = sheet_obj.get_all_records()
 
     if not records:
@@ -47,10 +43,8 @@ def next_id(sheet_obj):
     ids = []
 
     for r in records:
-
         try:
             ids.append(int(r.get("id", 0)))
-
         except:
             pass
 
@@ -59,12 +53,10 @@ def next_id(sheet_obj):
 # ================= DOCTORS =================
 
 def get_doctors():
-
     return doctors_sheet.get_all_records()
 
 
 def add_doctor(data):
-
     doctors_sheet.append_row([
         next_id(doctors_sheet),
         data.get("name", ""),
@@ -78,15 +70,11 @@ def add_doctor(data):
 
 
 def delete_doctor(name):
-
     rows = doctors_sheet.get_all_records()
 
     for i, r in enumerate(rows):
-
         if r.get("name") == name:
-
             doctors_sheet.delete_rows(i + 2)
-
             return True
 
     return False
@@ -94,13 +82,10 @@ def delete_doctor(name):
 # ================= APPOINTMENTS =================
 
 def get_appointments():
-
     return appointments_sheet.get_all_records()
 
 
 def add_appointment(data):
-
-    print("ADDING APPOINTMENT:", data)
 
     appointments_sheet.append_row([
         next_id(appointments_sheet),
@@ -114,8 +99,6 @@ def add_appointment(data):
         now()
     ])
 
-    print("APPOINTMENT SAVED")
-
 
 def cancel_appointment(name, phone):
 
@@ -123,56 +106,53 @@ def cancel_appointment(name, phone):
 
     for i, r in enumerate(rows):
 
-        if (
-            r.get("patient_name") == name
-            and r.get("phone") == phone
-        ):
+        if r.get("patient_name") == name and r.get("phone") == phone:
 
-            appointments_sheet.update_cell(
-                i + 2,
-                8,
-                "Cancelled"
-            )
-
+            appointments_sheet.update_cell(i + 2, 8, "Cancelled")
             return True
 
     return False
 
 
-def reschedule_appointment(
-    name,
-    phone,
-    new_date,
-    new_time
-):
+def reschedule_appointment(name, phone, new_date, new_time):
 
     rows = appointments_sheet.get_all_records()
 
     for i, r in enumerate(rows):
 
-        if (
-            r.get("patient_name") == name
-            and r.get("phone") == phone
-        ):
+        if r.get("patient_name") == name and r.get("phone") == phone:
 
-            appointments_sheet.update_cell(
-                i + 2,
-                6,
-                new_date
-            )
-
-            appointments_sheet.update_cell(
-                i + 2,
-                7,
-                new_time
-            )
-
-            appointments_sheet.update_cell(
-                i + 2,
-                8,
-                "Rescheduled"
-            )
+            appointments_sheet.update_cell(i + 2, 6, new_date)
+            appointments_sheet.update_cell(i + 2, 7, new_time)
+            appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
 
             return True
 
     return False
+
+
+# ================= AVAILABILITY (NEW FIX) =================
+
+def check_availability(doctor, date):
+
+    appointments = appointments_sheet.get_all_records()
+
+    booked = []
+
+    for a in appointments:
+
+        if (
+            a.get("doctor") == doctor
+            and a.get("date") == date
+            and a.get("status") in ["Booked", "Rescheduled"]
+        ):
+            booked.append(a.get("time"))
+
+    return booked
+
+
+def is_slot_available(doctor, date, time):
+
+    booked = check_availability(doctor, date)
+
+    return time not in booked
