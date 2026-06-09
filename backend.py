@@ -8,7 +8,9 @@ from database import (
     get_appointments,
     add_appointment,
     cancel_appointment,
-    reschedule_appointment
+    reschedule_appointment,
+    check_availability,
+    is_slot_available
 )
 
 app = FastAPI(title="Hospital API")
@@ -48,76 +50,91 @@ class Reschedule(BaseModel):
     new_date: str
     new_time: str
 
+
+class Availability(BaseModel):
+    doctor: str
+    date: str
+
+
 # ================= ROOT =================
 
 @app.get("/")
 def home():
-
-    return {
-        "message": "Hospital API Running"
-    }
+    return {"message": "Hospital API Running"}
 
 # ================= DOCTORS =================
 
 @app.get("/get_doctors")
 def doctors():
-
     return get_doctors()
 
 
 @app.post("/add_doctor")
 def add(data: Doctor):
-
     try:
-
         add_doctor(data.dict())
-
-        return {
-            "message": "Doctor added successfully",
-            "success": True
-        }
-
+        return {"message": "Doctor added successfully", "success": True}
     except Exception as e:
-
-        return {
-            "message": str(e),
-            "success": False
-        }
+        return {"message": str(e), "success": False}
 
 
 @app.post("/delete_doctor")
 def delete(data: DeleteDoctor):
-
     try:
-
         delete_doctor(data.name)
-
-        return {
-            "message": "Doctor deleted successfully",
-            "success": True
-        }
-
+        return {"message": "Doctor deleted successfully", "success": True}
     except Exception as e:
+        return {"message": str(e), "success": False}
 
-        return {
-            "message": str(e),
-            "success": False
-        }
+# ================= AVAILABILITY =================
+
+@app.post("/check_availability")
+def availability(data: Availability):
+
+    booked = check_availability(data.doctor, data.date)
+
+    all_slots = [
+        "09:00 AM",
+        "10:00 AM",
+        "11:00 AM",
+        "12:00 PM",
+        "01:00 PM",
+        "02:00 PM",
+        "03:00 PM",
+        "04:00 PM",
+        "05:00 PM"
+    ]
+
+    available = []
+
+    for slot in all_slots:
+        if slot not in booked:
+            available.append(slot)
+
+    return {
+        "doctor": data.doctor,
+        "date": data.date,
+        "available_slots": available,
+        "success": True
+    }
 
 # ================= APPOINTMENTS =================
 
 @app.get("/get_appointments")
 def appointments():
-
     return get_appointments()
 
 
 @app.post("/book_appointment")
 def book(data: Appointment):
 
-    print("BOOKING DATA:", data.dict())
-
     try:
+
+        if not is_slot_available(data.doctor, data.date, data.time):
+            return {
+                "message": "Slot already booked",
+                "success": False
+            }
 
         add_appointment(data.dict())
 
@@ -127,43 +144,23 @@ def book(data: Appointment):
         }
 
     except Exception as e:
-
-        print("ERROR:", str(e))
-
-        return {
-            "message": str(e),
-            "success": False
-        }
+        return {"message": str(e), "success": False}
 
 
 @app.post("/cancel_appointment")
 def cancel(data: Cancel):
 
     try:
-
-        cancel_appointment(
-            data.patient_name,
-            data.phone
-        )
-
-        return {
-            "message": "Appointment cancelled",
-            "success": True
-        }
-
+        cancel_appointment(data.patient_name, data.phone)
+        return {"message": "Appointment cancelled", "success": True}
     except Exception as e:
-
-        return {
-            "message": str(e),
-            "success": False
-        }
+        return {"message": str(e), "success": False}
 
 
 @app.post("/reschedule_appointment")
 def reschedule(data: Reschedule):
 
     try:
-
         reschedule_appointment(
             data.patient_name,
             data.phone,
@@ -171,14 +168,7 @@ def reschedule(data: Reschedule):
             data.new_time
         )
 
-        return {
-            "message": "Appointment rescheduled",
-            "success": True
-        }
+        return {"message": "Appointment rescheduled", "success": True}
 
     except Exception as e:
-
-        return {
-            "message": str(e),
-            "success": False
-        }
+        return {"message": str(e), "success": False}
