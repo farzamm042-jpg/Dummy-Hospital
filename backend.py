@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from datetime import datetime
 
 from database import (
     get_doctors,
@@ -15,6 +16,27 @@ from database import (
 )
 
 app = FastAPI(title="Hospital API")
+
+# ================= HELPERS =================
+
+def validate_date(date_str):
+
+    try:
+
+        date_obj = datetime.strptime(
+            date_str,
+            "%Y-%m-%d"
+        )
+
+        current_year = datetime.now().year
+
+        if date_obj.year != current_year:
+            return False
+
+        return True
+
+    except:
+        return False
 
 # ================= SCHEMAS =================
 
@@ -60,15 +82,27 @@ class Availability(BaseModel):
 
 @app.get("/")
 def home():
+
     return {
-        "message": "Hospital API Running"
+        "message": "Hospital API Running",
+        "success": True
     }
 
 # ================= DOCTORS =================
 
 @app.get("/get_doctors")
 def doctors():
-    return get_doctors()
+
+    try:
+
+        return get_doctors()
+
+    except Exception as e:
+
+        return {
+            "message": str(e),
+            "success": False
+        }
 
 
 @app.post("/add_doctor")
@@ -96,7 +130,14 @@ def delete(data: DeleteDoctor):
 
     try:
 
-        delete_doctor(data.name)
+        deleted = delete_doctor(data.name)
+
+        if not deleted:
+
+            return {
+                "message": "Doctor not found",
+                "success": False
+            }
 
         return {
             "message": "Doctor deleted successfully",
@@ -117,10 +158,18 @@ def availability(data: Availability):
 
     try:
 
+        if not validate_date(data.date):
+
+            return {
+                "message": f"Invalid date. Use current year ({datetime.now().year}) and YYYY-MM-DD format.",
+                "success": False
+            }
+
         if is_doctor_on_leave(
             data.doctor,
             data.date
         ):
+
             return {
                 "doctor": data.doctor,
                 "date": data.date,
@@ -171,7 +220,17 @@ def availability(data: Availability):
 
 @app.get("/get_appointments")
 def appointments():
-    return get_appointments()
+
+    try:
+
+        return get_appointments()
+
+    except Exception as e:
+
+        return {
+            "message": str(e),
+            "success": False
+        }
 
 
 @app.post("/book_appointment")
@@ -179,10 +238,18 @@ def book(data: Appointment):
 
     try:
 
+        if not validate_date(data.date):
+
+            return {
+                "message": f"Invalid date. Use current year ({datetime.now().year}) and YYYY-MM-DD format.",
+                "success": False
+            }
+
         if is_doctor_on_leave(
             data.doctor,
             data.date
         ):
+
             return {
                 "message": "Doctor is on leave",
                 "success": False
@@ -193,6 +260,7 @@ def book(data: Appointment):
             data.date,
             data.time
         ):
+
             return {
                 "message": "Slot already booked",
                 "success": False
@@ -220,10 +288,17 @@ def cancel(data: Cancel):
 
     try:
 
-        cancel_appointment(
+        cancelled = cancel_appointment(
             data.patient_name,
             data.phone
         )
+
+        if not cancelled:
+
+            return {
+                "message": "Appointment not found",
+                "success": False
+            }
 
         return {
             "message": "Appointment cancelled",
@@ -243,12 +318,26 @@ def reschedule(data: Reschedule):
 
     try:
 
-        reschedule_appointment(
+        if not validate_date(data.new_date):
+
+            return {
+                "message": f"Invalid date. Use current year ({datetime.now().year}) and YYYY-MM-DD format.",
+                "success": False
+            }
+
+        updated = reschedule_appointment(
             data.patient_name,
             data.phone,
             data.new_date,
             data.new_time
         )
+
+        if not updated:
+
+            return {
+                "message": "Appointment not found",
+                "success": False
+            }
 
         return {
             "message": "Appointment rescheduled",
