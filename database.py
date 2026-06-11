@@ -28,6 +28,13 @@ sheet = client.open("hospital_db")
 doctors_sheet = sheet.worksheet("Doctors")
 appointments_sheet = sheet.worksheet("Appointments")
 
+# ================= DOCTOR LEAVES =================
+
+try:
+    leaves_sheet = sheet.worksheet("DoctorLeaves")
+except:
+    leaves_sheet = None
+
 # ================= HELPERS =================
 
 def now():
@@ -35,6 +42,7 @@ def now():
 
 
 def next_id(sheet_obj):
+
     records = sheet_obj.get_all_records()
 
     if not records:
@@ -57,6 +65,7 @@ def get_doctors():
 
 
 def add_doctor(data):
+
     doctors_sheet.append_row([
         next_id(doctors_sheet),
         data.get("name", ""),
@@ -70,10 +79,13 @@ def add_doctor(data):
 
 
 def delete_doctor(name):
+
     rows = doctors_sheet.get_all_records()
 
     for i, r in enumerate(rows):
+
         if r.get("name") == name:
+
             doctors_sheet.delete_rows(i + 2)
             return True
 
@@ -106,36 +118,70 @@ def cancel_appointment(name, phone):
 
     for i, r in enumerate(rows):
 
-        if r.get("patient_name") == name and r.get("phone") == phone:
+        if (
+            r.get("patient_name") == name
+            and r.get("phone") == phone
+        ):
 
-            appointments_sheet.update_cell(i + 2, 8, "Cancelled")
+            appointments_sheet.update_cell(
+                i + 2,
+                8,
+                "Cancelled"
+            )
+
             return True
 
     return False
 
 
-def reschedule_appointment(name, phone, new_date, new_time):
+def reschedule_appointment(
+    name,
+    phone,
+    new_date,
+    new_time
+):
 
     rows = appointments_sheet.get_all_records()
 
     for i, r in enumerate(rows):
 
-        if r.get("patient_name") == name and r.get("phone") == phone:
+        if (
+            r.get("patient_name") == name
+            and r.get("phone") == phone
+        ):
 
-            appointments_sheet.update_cell(i + 2, 6, new_date)
-            appointments_sheet.update_cell(i + 2, 7, new_time)
-            appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
+            appointments_sheet.update_cell(
+                i + 2,
+                6,
+                new_date
+            )
+
+            appointments_sheet.update_cell(
+                i + 2,
+                7,
+                new_time
+            )
+
+            appointments_sheet.update_cell(
+                i + 2,
+                8,
+                "Rescheduled"
+            )
 
             return True
 
     return False
 
+# ================= AVAILABILITY =================
 
-# ================= AVAILABILITY (NEW FIX) =================
+def check_availability(
+    doctor,
+    date
+):
 
-def check_availability(doctor, date):
-
-    appointments = appointments_sheet.get_all_records()
+    appointments = (
+        appointments_sheet.get_all_records()
+    )
 
     booked = []
 
@@ -144,15 +190,73 @@ def check_availability(doctor, date):
         if (
             a.get("doctor") == doctor
             and a.get("date") == date
-            and a.get("status") in ["Booked", "Rescheduled"]
+            and a.get("status")
+            in ["Booked", "Rescheduled"]
         ):
-            booked.append(a.get("time"))
+            booked.append(
+                a.get("time")
+            )
 
     return booked
 
 
-def is_slot_available(doctor, date, time):
+def is_slot_available(
+    doctor,
+    date,
+    time
+):
 
-    booked = check_availability(doctor, date)
+    booked = check_availability(
+        doctor,
+        date
+    )
 
     return time not in booked
+
+# ================= DOCTOR LEAVES =================
+
+def is_doctor_on_leave(
+    doctor,
+    date
+):
+
+    if not leaves_sheet:
+        return False
+
+    try:
+
+        leaves = (
+            leaves_sheet.get_all_records()
+        )
+
+        for leave in leaves:
+
+            if (
+                str(
+                    leave.get(
+                        "doctor",
+                        ""
+                    )
+                ).strip()
+                ==
+                str(
+                    doctor
+                ).strip()
+                and
+                str(
+                    leave.get(
+                        "date",
+                        ""
+                    )
+                ).strip()
+                ==
+                str(
+                    date
+                ).strip()
+            ):
+                return True
+
+    except:
+        return False
+
+    return False
