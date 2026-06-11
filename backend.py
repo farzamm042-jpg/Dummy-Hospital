@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, date
 
 from database import (
     get_doctors,
@@ -12,23 +12,53 @@ from database import (
     reschedule_appointment,
     check_availability,
     is_slot_available,
-    is_doctor_on_leave,
-    normalize_time,
-    normalize_name
+    is_doctor_on_leave
 )
 
 app = FastAPI(title="Hospital API")
 
-# ================= DATE VALIDATION =================
 
-def validate_date(date_str):
+# ================= UTILITIES =================
+
+def normalize_text(text: str) -> str:
+    if not text:
+        return text
+    return " ".join(text.strip().split())
+
+
+def normalize_time(time_str: str) -> str:
+    if not time_str:
+        return time_str
+
+    t = time_str.strip().lower().replace(" ", "")
+
+    mapping = {
+        "8am": "08:00 AM",
+        "9am": "09:00 AM",
+        "10am": "10:00 AM",
+        "11am": "11:00 AM",
+        "12pm": "12:00 PM",
+        "1pm": "01:00 PM",
+        "2pm": "02:00 PM",
+        "3pm": "03:00 PM",
+        "4pm": "04:00 PM",
+        "5pm": "05:00 PM",
+    }
+
+    return mapping.get(t, time_str.strip())
+
+
+def validate_date(date_str: str):
     try:
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        today = date.today()
 
-        current_year = datetime.now().year
+        # must not be past
+        if d < today:
+            return False
 
-        # strict current year rule
-        if date_obj.year != current_year:
+        # must be current or next year only
+        if d.year < today.year or d.year > today.year + 1:
             return False
 
         return True
@@ -78,47 +108,27 @@ class Availability(BaseModel):
     date: str
 
 
-# ================= ROOT =================
-
-@app.get("/")
-def home():
-    return {
-        "message": "Hospital API Running",
-        "success": True
-    }
-
-
 # ================= DOCTORS =================
 
 @app.get("/get_doctors")
 def doctors():
-    try:
-        return get_doctors()
-    except Exception as e:
-        return {"message": str(e), "success": False}
+    return get_doctors()
 
 
 @app.post("/add_doctor")
 def add(data: Doctor):
-    try:
-        add_doctor(data.dict())
-        return {"message": "Doctor added successfully", "success": True}
-    except Exception as e:
-        return {"message": str(e), "success": False}
+    add_doctor(data.dict())
+    return {"message": "Doctor added successfully", "success": True}
 
 
 @app.post("/delete_doctor")
 def delete(data: DeleteDoctor):
-    try:
-        deleted = delete_doctor(data.name)
+    deleted = delete_doctor(data.name)
 
-        if not deleted:
-            return {"message": "Doctor not found", "success": False}
+    if not deleted:
+        return {"message": "Doctor not found", "success": False}
 
-        return {"message": "Doctor deleted successfully", "success": True}
-
-    except Exception as e:
-        return {"message": str(e), "success": False}
+    return {"message": "Doctor deleted successfully", "success": True}
 
 
 # ================= AVAILABILITY =================
@@ -126,120 +136,80 @@ def delete(data: DeleteDoctor):
 @app.post("/check_availability")
 def availability(data: Availability):
 
-    try:
-        if not validate_date(data.date):
-            return {
-                "message": f"Invalid date. Use format YYYY-MM-DD with current year {datetime.now().year}",
-                "success": False
-            }
+    doctor = normalize_text(data.doctor)
+    d = data.date.strip()
 
-        if is_doctor_on_leave(data.doctor, data.date):
-            return {
-                "doctor": data.doctor,
-                "date": data.date,
-                "available_slots": [],
-                "message": "Doctor is on leave",
-                "success": False
-            }
+    if not validate_date(d):
+        return {"message": "Invalid date", "success": False}
 
-        booked = check_availability(data.doctor, data.date)
-
-        all_slots = [
-            "09:00 AM",
-            "10:00 AM",
-            "11:00 AM",
-            "12:00 PM",
-            "01:00 PM",
-            "02:00 PM",
-            "03:00 PM",
-            "04:00 PM",
-            "05:00 PM"
-        ]
-
-        available = []
-
-        for slot in all_slots:
-            if normalize_time(slot) not in booked:
-                available.append(slot)
-
+    if is_doctor_on_leave(doctor, d):
         return {
-            "doctor": data.doctor,
-            "date": data.date,
-            "available_slots": available,
-            "success": True
+            "doctor": doctor,
+            "date": d,
+            "available_slots": [],
+            "message": "Doctor on leave",
+            "success": False
         }
 
-    except Exception as e:
-        return {"message": str(e), "success": False}
+    booked = check_availability(doctor, d)
+
+    slots = [
+        "09:00 AM", "10:00 AM", "11:00 AM",
+        "12:00 PM", "01:00 PM", "02:00 PM",
+        "03:00 PM", "04:00 PM", "05:00 PM"
+    ]
+
+    available = [s for s in slots if s not in booked]
+
+    return {
+        "doctor": doctor,
+        "date": d,
+        "available_slots": available,
+        "success": True
+    }
 
 
 # ================= APPOINTMENTS =================
 
 @app.get("/get_appointments")
 def appointments():
-    try:
-        return get_appointments()
-    except Exception as e:
-        return {"message": str(e), "success": False}
+    return get_appointments()
 
 
-# ================= BOOK APPOINTMENT (MAIN FIXED LOGIC) =================
+# ================= BOOK =================
 
 @app.post("/book_appointment")
 def book(data: Appointment):
 
-    try:
-        # validate date
-        if not validate_date(data.date):
-            return {
-                "message": f"Invalid date. Use YYYY-MM-DD and current year {datetime.now().year}",
-                "success": False
-            }
+    doctor = normalize_text(data.doctor)
+    name = normalize_text(data.patient_name)
+    phone = data.phone.strip()
+    reason = data.reason.strip()
+    d = data.date.strip()
+    t = normalize_time(data.time)
 
-        # normalize inputs
-        doctor = data.doctor.strip()
-        time = normalize_time(data.time)
-        name = data.patient_name.strip()
+    if not validate_date(d):
+        return {"message": "Invalid date", "success": False}
 
-        # check leave
-        if is_doctor_on_leave(doctor, data.date):
-            return {
-                "message": "Doctor is on leave",
-                "success": False
-            }
+    if is_doctor_on_leave(doctor, d):
+        return {"message": "Doctor is on leave", "success": False}
 
-        # check slot availability
-        if not is_slot_available(doctor, data.date, time):
-            return {
-                "message": "Slot already booked",
-                "success": False
-            }
+    if not is_slot_available(doctor, d, t):
+        return {"message": "Slot already booked", "success": False}
 
-        # FINAL SAFETY CHECK (double protection)
-        booked_slots = check_availability(doctor, data.date)
-        if time in booked_slots:
-            return {
-                "message": "Slot conflict detected",
-                "success": False
-            }
+    if t in check_availability(doctor, d):
+        return {"message": "Conflict detected", "success": False}
 
-        # store clean data
-        add_appointment({
-            "patient_name": name,
-            "phone": data.phone.strip(),
-            "reason": data.reason,
-            "doctor": doctor,
-            "date": data.date,
-            "time": time
-        })
+    add_appointment({
+        "patient_name": name,
+        "phone": phone,
+        "reason": reason,
+        "doctor": doctor,
+        "date": d,
+        "time": t
+    })
 
-        return {
-            "message": "Appointment booked successfully",
-            "success": True
-        }
-
-    except Exception as e:
-        return {"message": str(e), "success": False}
+    return {"message": "Appointment booked successfully", "success": True}
 
 
 # ================= CANCEL =================
@@ -247,19 +217,12 @@ def book(data: Appointment):
 @app.post("/cancel_appointment")
 def cancel(data: Cancel):
 
-    try:
-        cancelled = cancel_appointment(
-            data.patient_name,
-            data.phone
-        )
+    ok = cancel_appointment(data.patient_name, data.phone)
 
-        if not cancelled:
-            return {"message": "Appointment not found", "success": False}
+    if not ok:
+        return {"message": "Not found", "success": False}
 
-        return {"message": "Appointment cancelled", "success": True}
-
-    except Exception as e:
-        return {"message": str(e), "success": False}
+    return {"message": "Cancelled", "success": True}
 
 
 # ================= RESCHEDULE =================
@@ -267,24 +230,17 @@ def cancel(data: Cancel):
 @app.post("/reschedule_appointment")
 def reschedule(data: Reschedule):
 
-    try:
-        if not validate_date(data.new_date):
-            return {
-                "message": f"Invalid date. Use YYYY-MM-DD and current year {datetime.now().year}",
-                "success": False
-            }
+    if not validate_date(data.new_date):
+        return {"message": "Invalid date", "success": False}
 
-        updated = reschedule_appointment(
-            data.patient_name,
-            data.phone,
-            data.new_date,
-            data.new_time
-        )
+    ok = reschedule_appointment(
+        data.patient_name,
+        data.phone,
+        data.new_date,
+        data.new_time
+    )
 
-        if not updated:
-            return {"message": "Appointment not found", "success": False}
+    if not ok:
+        return {"message": "Not found", "success": False}
 
-        return {"message": "Appointment rescheduled", "success": True}
-
-    except Exception as e:
-        return {"message": str(e), "success": False}
+    return {"message": "Rescheduled successfully", "success": True}
