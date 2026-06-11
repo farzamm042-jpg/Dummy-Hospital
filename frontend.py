@@ -1,12 +1,11 @@
 import streamlit as st
 import requests
 import pandas as pd
+import json
 
-# ================= API =================
+# ================= CONFIG =================
 
 API_URL = "https://dummy-hospital-production.up.railway.app"
-
-# ================= PAGE CONFIG =================
 
 st.set_page_config(
     page_title="Hospital Dashboard",
@@ -16,23 +15,23 @@ st.set_page_config(
 
 st.title("🏥 Hospital Dashboard")
 
-# ================= HELPERS =================
+# ================= SAFE HELPERS =================
 
 def safe_get(url):
     try:
-        return requests.get(url).json()
+        res = requests.get(url, timeout=10)
+        return res.json()
     except:
         return []
 
-
 def safe_post(url, payload):
     try:
-        response = requests.post(url, json=payload)
-        return response.json()
+        res = requests.post(url, json=payload, timeout=10)
+        return res.json()
     except Exception as e:
-        return {"message": str(e)}
+        return {"message": str(e), "success": False}
 
-# ================= MENU =================
+# ================= SIDEBAR MENU =================
 
 menu = st.sidebar.radio(
     "Menu",
@@ -60,14 +59,22 @@ if menu == "Dashboard":
     col1.metric("Doctors", len(doctors))
     col2.metric("Appointments", len(appointments))
 
+    st.subheader("Quick Overview")
+
+    st.write("System Status: 🟢 Running")
+
 # ================= DOCTORS =================
 
 elif menu == "Doctors":
 
+    st.subheader("Doctors List")
+
     doctors = safe_get(f"{API_URL}/get_doctors")
 
-    st.subheader("Doctors List")
-    st.dataframe(pd.DataFrame(doctors))
+    if doctors:
+        st.dataframe(pd.DataFrame(doctors))
+    else:
+        st.warning("No doctors found or API not responding.")
 
 # ================= ADD DOCTOR =================
 
@@ -78,29 +85,28 @@ elif menu == "Add Doctor":
     name = st.text_input("Doctor Name")
     specialty = st.text_input("Specialty")
     days = st.text_input("Days")
-    start_time = st.text_input("Start Time")
-    end_time = st.text_input("End Time")
-
+    start_time = st.text_input("Start Time (HH:MM)")
+    end_time = st.text_input("End Time (HH:MM)")
     fee = st.number_input("Fee", min_value=0)
 
     if st.button("Add Doctor"):
 
-        if not name:
-            st.error("Doctor name is required")
-        else:
-            response = safe_post(
-                f"{API_URL}/add_doctor",
-                {
-                    "name": name,
-                    "specialty": specialty,
-                    "days": days,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "fee": int(fee)
-                }
-            )
+        response = safe_post(
+            f"{API_URL}/add_doctor",
+            {
+                "name": name,
+                "specialty": specialty,
+                "days": days,
+                "start_time": start_time,
+                "end_time": end_time,
+                "fee": int(fee)
+            }
+        )
 
+        if response.get("success"):
             st.success(response.get("message"))
+        else:
+            st.error(response.get("message"))
 
 # ================= DELETE DOCTOR =================
 
@@ -110,23 +116,21 @@ elif menu == "Delete Doctor":
 
     doctors = safe_get(f"{API_URL}/get_doctors")
 
-    doctor_names = [d.get("name") for d in doctors if d.get("name")]
+    doctor_names = [d.get("name") for d in doctors]
 
-    if doctor_names:
+    doctor = st.selectbox("Select Doctor", doctor_names if doctor_names else ["No doctors"])
 
-        doctor = st.selectbox("Select Doctor", doctor_names)
+    if st.button("Delete Doctor"):
 
-        if st.button("Delete Doctor"):
+        response = safe_post(
+            f"{API_URL}/delete_doctor",
+            {"name": doctor}
+        )
 
-            response = safe_post(
-                f"{API_URL}/delete_doctor",
-                {"name": doctor}
-            )
-
+        if response.get("success"):
             st.success(response.get("message"))
-
-    else:
-        st.warning("No doctors available")
+        else:
+            st.error(response.get("message"))
 
 # ================= APPOINTMENTS =================
 
@@ -136,63 +140,48 @@ elif menu == "Appointments":
 
     appointments = safe_get(f"{API_URL}/get_appointments")
 
-    st.dataframe(pd.DataFrame(appointments))
+    if appointments:
+        st.dataframe(pd.DataFrame(appointments))
+    else:
+        st.warning("No appointments found or API error.")
 
 # ================= BOOK APPOINTMENT =================
 
 elif menu == "Book Appointment":
 
-    st.subheader("Book New Appointment")
+    st.subheader("Book Appointment")
 
     doctors = safe_get(f"{API_URL}/get_doctors")
-    doctor_names = [d.get("name") for d in doctors if d.get("name")]
+
+    doctor_names = [d.get("name") for d in doctors]
 
     patient_name = st.text_input("Patient Name")
     phone = st.text_input("Phone")
     reason = st.text_input("Reason")
 
-    if doctor_names:
-        doctor = st.selectbox("Doctor", doctor_names)
-    else:
-        st.warning("No doctors available")
-        doctor = None
+    doctor = st.selectbox("Doctor", doctor_names if doctor_names else ["No doctors"])
 
     date = st.date_input("Date")
-
-    # ✅ FIXED TIME INPUT (NO MORE TEXT BUGS)
-    time = st.selectbox(
-        "Time",
-        [
-            "09:00 AM",
-            "10:00 AM",
-            "11:00 AM",
-            "12:00 PM",
-            "01:00 PM",
-            "02:00 PM",
-            "03:00 PM",
-            "04:00 PM",
-            "05:00 PM"
-        ]
-    )
+    time = st.text_input("Time (e.g. 09:00 AM)")
 
     if st.button("Book Appointment"):
 
-        if not patient_name or not phone or not doctor:
-            st.error("Please fill all required fields")
-        else:
-            response = safe_post(
-                f"{API_URL}/book_appointment",
-                {
-                    "patient_name": patient_name,
-                    "phone": phone,
-                    "reason": reason,
-                    "doctor": doctor,
-                    "date": str(date),
-                    "time": time
-                }
-            )
+        response = safe_post(
+            f"{API_URL}/book_appointment",
+            {
+                "patient_name": patient_name,
+                "phone": phone,
+                "reason": reason,
+                "doctor": doctor,
+                "date": str(date),
+                "time": time
+            }
+        )
 
+        if response.get("success"):
             st.success(response.get("message"))
+        else:
+            st.error(response.get("message"))
 
 # ================= CANCEL =================
 
@@ -205,18 +194,18 @@ elif menu == "Cancel Appointment":
 
     if st.button("Cancel"):
 
-        if not patient_name or not phone:
-            st.error("Please enter all details")
-        else:
-            response = safe_post(
-                f"{API_URL}/cancel_appointment",
-                {
-                    "patient_name": patient_name,
-                    "phone": phone
-                }
-            )
+        response = safe_post(
+            f"{API_URL}/cancel_appointment",
+            {
+                "patient_name": patient_name,
+                "phone": phone
+            }
+        )
 
+        if response.get("success"):
             st.success(response.get("message"))
+        else:
+            st.error(response.get("message"))
 
 # ================= RESCHEDULE =================
 
@@ -226,37 +215,22 @@ elif menu == "Reschedule Appointment":
 
     patient_name = st.text_input("Patient Name")
     phone = st.text_input("Phone")
-
     new_date = st.date_input("New Date")
-
-    new_time = st.selectbox(
-        "New Time",
-        [
-            "09:00 AM",
-            "10:00 AM",
-            "11:00 AM",
-            "12:00 PM",
-            "01:00 PM",
-            "02:00 PM",
-            "03:00 PM",
-            "04:00 PM",
-            "05:00 PM"
-        ]
-    )
+    new_time = st.text_input("New Time (e.g. 10:00 AM)")
 
     if st.button("Reschedule"):
 
-        if not patient_name or not phone:
-            st.error("Please enter all details")
-        else:
-            response = safe_post(
-                f"{API_URL}/reschedule_appointment",
-                {
-                    "patient_name": patient_name,
-                    "phone": phone,
-                    "new_date": str(new_date),
-                    "new_time": new_time
-                }
-            )
+        response = safe_post(
+            f"{API_URL}/reschedule_appointment",
+            {
+                "patient_name": patient_name,
+                "phone": phone,
+                "new_date": str(new_date),
+                "new_time": new_time
+            }
+        )
 
+        if response.get("success"):
             st.success(response.get("message"))
+        else:
+            st.error(response.get("message"))
