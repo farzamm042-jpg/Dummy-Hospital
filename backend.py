@@ -12,24 +12,22 @@ from database import (
     reschedule_appointment,
     check_availability,
     is_slot_available,
-    is_doctor_on_leave
+    is_doctor_on_leave,
+    normalize_time,
+    normalize_name
 )
 
 app = FastAPI(title="Hospital API")
 
-# ================= HELPERS =================
+# ================= DATE VALIDATION =================
 
 def validate_date(date_str):
-
     try:
-
-        date_obj = datetime.strptime(
-            date_str,
-            "%Y-%m-%d"
-        )
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
 
         current_year = datetime.now().year
 
+        # strict current year rule
         if date_obj.year != current_year:
             return False
 
@@ -37,6 +35,7 @@ def validate_date(date_str):
 
     except:
         return False
+
 
 # ================= SCHEMAS =================
 
@@ -78,78 +77,49 @@ class Availability(BaseModel):
     doctor: str
     date: str
 
+
 # ================= ROOT =================
 
 @app.get("/")
 def home():
-
     return {
         "message": "Hospital API Running",
         "success": True
     }
 
+
 # ================= DOCTORS =================
 
 @app.get("/get_doctors")
 def doctors():
-
     try:
-
         return get_doctors()
-
     except Exception as e:
-
-        return {
-            "message": str(e),
-            "success": False
-        }
+        return {"message": str(e), "success": False}
 
 
 @app.post("/add_doctor")
 def add(data: Doctor):
-
     try:
-
         add_doctor(data.dict())
-
-        return {
-            "message": "Doctor added successfully",
-            "success": True
-        }
-
+        return {"message": "Doctor added successfully", "success": True}
     except Exception as e:
-
-        return {
-            "message": str(e),
-            "success": False
-        }
+        return {"message": str(e), "success": False}
 
 
 @app.post("/delete_doctor")
 def delete(data: DeleteDoctor):
-
     try:
-
         deleted = delete_doctor(data.name)
 
         if not deleted:
+            return {"message": "Doctor not found", "success": False}
 
-            return {
-                "message": "Doctor not found",
-                "success": False
-            }
-
-        return {
-            "message": "Doctor deleted successfully",
-            "success": True
-        }
+        return {"message": "Doctor deleted successfully", "success": True}
 
     except Exception as e:
+        return {"message": str(e), "success": False}
 
-        return {
-            "message": str(e),
-            "success": False
-        }
 
 # ================= AVAILABILITY =================
 
@@ -157,19 +127,13 @@ def delete(data: DeleteDoctor):
 def availability(data: Availability):
 
     try:
-
         if not validate_date(data.date):
-
             return {
-                "message": f"Invalid date. Use current year ({datetime.now().year}) and YYYY-MM-DD format.",
+                "message": f"Invalid date. Use format YYYY-MM-DD with current year {datetime.now().year}",
                 "success": False
             }
 
-        if is_doctor_on_leave(
-            data.doctor,
-            data.date
-        ):
-
+        if is_doctor_on_leave(data.doctor, data.date):
             return {
                 "doctor": data.doctor,
                 "date": data.date,
@@ -178,10 +142,7 @@ def availability(data: Availability):
                 "success": False
             }
 
-        booked = check_availability(
-            data.doctor,
-            data.date
-        )
+        booked = check_availability(data.doctor, data.date)
 
         all_slots = [
             "09:00 AM",
@@ -198,8 +159,7 @@ def availability(data: Availability):
         available = []
 
         for slot in all_slots:
-
-            if slot not in booked:
+            if normalize_time(slot) not in booked:
                 available.append(slot)
 
         return {
@@ -210,65 +170,68 @@ def availability(data: Availability):
         }
 
     except Exception as e:
+        return {"message": str(e), "success": False}
 
-        return {
-            "message": str(e),
-            "success": False
-        }
 
 # ================= APPOINTMENTS =================
 
 @app.get("/get_appointments")
 def appointments():
-
     try:
-
         return get_appointments()
-
     except Exception as e:
+        return {"message": str(e), "success": False}
 
-        return {
-            "message": str(e),
-            "success": False
-        }
 
+# ================= BOOK APPOINTMENT (MAIN FIXED LOGIC) =================
 
 @app.post("/book_appointment")
 def book(data: Appointment):
 
     try:
-
+        # validate date
         if not validate_date(data.date):
-
             return {
-                "message": f"Invalid date. Use current year ({datetime.now().year}) and YYYY-MM-DD format.",
+                "message": f"Invalid date. Use YYYY-MM-DD and current year {datetime.now().year}",
                 "success": False
             }
 
-        if is_doctor_on_leave(
-            data.doctor,
-            data.date
-        ):
+        # normalize inputs
+        doctor = data.doctor.strip()
+        time = normalize_time(data.time)
+        name = data.patient_name.strip()
 
+        # check leave
+        if is_doctor_on_leave(doctor, data.date):
             return {
                 "message": "Doctor is on leave",
                 "success": False
             }
 
-        if not is_slot_available(
-            data.doctor,
-            data.date,
-            data.time
-        ):
-
+        # check slot availability
+        if not is_slot_available(doctor, data.date, time):
             return {
                 "message": "Slot already booked",
                 "success": False
             }
 
-        add_appointment(
-            data.dict()
-        )
+        # FINAL SAFETY CHECK (double protection)
+        booked_slots = check_availability(doctor, data.date)
+        if time in booked_slots:
+            return {
+                "message": "Slot conflict detected",
+                "success": False
+            }
+
+        # store clean data
+        add_appointment({
+            "patient_name": name,
+            "phone": data.phone.strip(),
+            "reason": data.reason,
+            "doctor": doctor,
+            "date": data.date,
+            "time": time
+        })
 
         return {
             "message": "Appointment booked successfully",
@@ -276,52 +239,38 @@ def book(data: Appointment):
         }
 
     except Exception as e:
+        return {"message": str(e), "success": False}
 
-        return {
-            "message": str(e),
-            "success": False
-        }
 
+# ================= CANCEL =================
 
 @app.post("/cancel_appointment")
 def cancel(data: Cancel):
 
     try:
-
         cancelled = cancel_appointment(
             data.patient_name,
             data.phone
         )
 
         if not cancelled:
+            return {"message": "Appointment not found", "success": False}
 
-            return {
-                "message": "Appointment not found",
-                "success": False
-            }
-
-        return {
-            "message": "Appointment cancelled",
-            "success": True
-        }
+        return {"message": "Appointment cancelled", "success": True}
 
     except Exception as e:
+        return {"message": str(e), "success": False}
 
-        return {
-            "message": str(e),
-            "success": False
-        }
 
+# ================= RESCHEDULE =================
 
 @app.post("/reschedule_appointment")
 def reschedule(data: Reschedule):
 
     try:
-
         if not validate_date(data.new_date):
-
             return {
-                "message": f"Invalid date. Use current year ({datetime.now().year}) and YYYY-MM-DD format.",
+                "message": f"Invalid date. Use YYYY-MM-DD and current year {datetime.now().year}",
                 "success": False
             }
 
@@ -333,20 +282,9 @@ def reschedule(data: Reschedule):
         )
 
         if not updated:
+            return {"message": "Appointment not found", "success": False}
 
-            return {
-                "message": "Appointment not found",
-                "success": False
-            }
-
-        return {
-            "message": "Appointment rescheduled",
-            "success": True
-        }
+        return {"message": "Appointment rescheduled", "success": True}
 
     except Exception as e:
-
-        return {
-            "message": str(e),
-            "success": False
-        }
+        return {"message": str(e), "success": False}
