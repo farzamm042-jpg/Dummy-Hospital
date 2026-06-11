@@ -42,7 +42,6 @@ def now():
 
 
 def next_id(sheet_obj):
-
     records = sheet_obj.get_all_records()
 
     if not records:
@@ -58,6 +57,44 @@ def next_id(sheet_obj):
 
     return max(ids) + 1 if ids else 1
 
+
+# ================= NORMALIZATION (IMPORTANT FIX) =================
+
+def normalize_time(time_str):
+    """
+    Converts:
+    - 9am, 9 AM, 09:00 AM → 09:00
+    """
+    try:
+        if not time_str:
+            return ""
+
+        t = str(time_str).strip().lower()
+
+        # AM/PM format
+        if "am" in t or "pm" in t:
+            dt = datetime.strptime(t.upper(), "%I:%M %p")
+            return dt.strftime("%H:%M")
+
+        # already 24-hour format
+        if ":" in t:
+            dt = datetime.strptime(t, "%H:%M")
+            return dt.strftime("%H:%M")
+
+        return t
+
+    except:
+        return str(time_str).strip().lower()
+
+
+def normalize_name(name):
+    return str(name).strip().lower()
+
+
+def normalize_date(date):
+    return str(date).strip()
+
+
 # ================= DOCTORS =================
 
 def get_doctors():
@@ -65,7 +102,6 @@ def get_doctors():
 
 
 def add_doctor(data):
-
     doctors_sheet.append_row([
         next_id(doctors_sheet),
         data.get("name", ""),
@@ -79,17 +115,15 @@ def add_doctor(data):
 
 
 def delete_doctor(name):
-
     rows = doctors_sheet.get_all_records()
 
     for i, r in enumerate(rows):
-
-        if r.get("name") == name:
-
+        if normalize_name(r.get("name")) == normalize_name(name):
             doctors_sheet.delete_rows(i + 2)
             return True
 
     return False
+
 
 # ================= APPOINTMENTS =================
 
@@ -98,7 +132,6 @@ def get_appointments():
 
 
 def add_appointment(data):
-
     appointments_sheet.append_row([
         next_id(appointments_sheet),
         data.get("patient_name", ""),
@@ -106,153 +139,80 @@ def add_appointment(data):
         data.get("reason", ""),
         data.get("doctor", ""),
         data.get("date", ""),
-        data.get("time", ""),
+        normalize_time(data.get("time", "")),  # FIX APPLIED
         "Booked",
         now()
     ])
 
 
 def cancel_appointment(name, phone):
-
     rows = appointments_sheet.get_all_records()
 
     for i, r in enumerate(rows):
-
         if (
-            r.get("patient_name") == name
-            and r.get("phone") == phone
+            normalize_name(r.get("patient_name")) == normalize_name(name)
+            and str(r.get("phone", "")).strip() == str(phone).strip()
         ):
-
-            appointments_sheet.update_cell(
-                i + 2,
-                8,
-                "Cancelled"
-            )
-
+            appointments_sheet.update_cell(i + 2, 8, "Cancelled")
             return True
 
     return False
 
 
-def reschedule_appointment(
-    name,
-    phone,
-    new_date,
-    new_time
-):
-
+def reschedule_appointment(name, phone, new_date, new_time):
     rows = appointments_sheet.get_all_records()
 
     for i, r in enumerate(rows):
-
         if (
-            r.get("patient_name") == name
-            and r.get("phone") == phone
+            normalize_name(r.get("patient_name")) == normalize_name(name)
+            and str(r.get("phone", "")).strip() == str(phone).strip()
         ):
-
-            appointments_sheet.update_cell(
-                i + 2,
-                6,
-                new_date
-            )
-
-            appointments_sheet.update_cell(
-                i + 2,
-                7,
-                new_time
-            )
-
-            appointments_sheet.update_cell(
-                i + 2,
-                8,
-                "Rescheduled"
-            )
-
+            appointments_sheet.update_cell(i + 2, 6, new_date)
+            appointments_sheet.update_cell(i + 2, 7, normalize_time(new_time))
+            appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
             return True
 
     return False
+
 
 # ================= AVAILABILITY =================
 
-def check_availability(
-    doctor,
-    date
-):
-
-    appointments = (
-        appointments_sheet.get_all_records()
-    )
+def check_availability(doctor, date):
+    appointments = appointments_sheet.get_all_records()
 
     booked = []
 
     for a in appointments:
-
         if (
-            a.get("doctor") == doctor
-            and a.get("date") == date
-            and a.get("status")
-            in ["Booked", "Rescheduled"]
+            str(a.get("doctor", "")).strip() == str(doctor).strip()
+            and normalize_date(a.get("date")) == normalize_date(date)
+            and a.get("status") in ["Booked", "Rescheduled"]
         ):
-            booked.append(
-                a.get("time")
-            )
+            booked.append(normalize_time(a.get("time")))
 
     return booked
 
 
-def is_slot_available(
-    doctor,
-    date,
-    time
-):
+def is_slot_available(doctor, date, time):
+    booked = check_availability(doctor, date)
 
-    booked = check_availability(
-        doctor,
-        date
-    )
+    return normalize_time(time) not in booked
 
-    return time not in booked
 
 # ================= DOCTOR LEAVES =================
 
-def is_doctor_on_leave(
-    doctor,
-    date
-):
+def is_doctor_on_leave(doctor, date):
 
     if not leaves_sheet:
         return False
 
     try:
-
-        leaves = (
-            leaves_sheet.get_all_records()
-        )
+        leaves = leaves_sheet.get_all_records()
 
         for leave in leaves:
-
             if (
-                str(
-                    leave.get(
-                        "doctor",
-                        ""
-                    )
-                ).strip()
-                ==
-                str(
-                    doctor
-                ).strip()
-                and
-                str(
-                    leave.get(
-                        "date",
-                        ""
-                    )
-                ).strip()
-                ==
-                str(
-                    date
-                ).strip()
+                normalize_name(leave.get("doctor", "")) == normalize_name(doctor)
+                and normalize_date(leave.get("date", "")) == normalize_date(date)
             ):
                 return True
 
