@@ -102,12 +102,50 @@ def normalize_date(date_val):
     return str(date_val).strip()
 
 
+# ================= FUZZY NAME MATCHING =================
+
+# Common Arabic/Pakistani name spelling variants
+NAME_VARIANTS = {
+    "mohammad": ["mohammed", "muhammad", "mohd", "md", "mohamad"],
+    "mohammed": ["mohammad", "muhammad", "mohd", "md", "mohamad"],
+    "muhammad": ["mohammad", "mohammed", "mohd", "md", "mohamad"],
+    "mohamad":  ["mohammad", "mohammed", "muhammad", "mohd"],
+    "mohd":     ["mohammad", "mohammed", "muhammad", "md"],
+    "ali":      ["aly"],
+    "hassan":   ["hasan"],
+    "hussain":  ["husain", "hussein", "husein"],
+    "usman":    ["uthman", "osman"],
+    "zainab":   ["zaynab", "zenab"],
+    "fatima":   ["fatimah", "fateema"],
+}
+
+def _expand_name_words(words: list) -> set:
+    expanded = set(words)
+    for w in words:
+        if w in NAME_VARIANTS:
+            expanded.update(NAME_VARIANTS[w])
+    return expanded
+
+def names_match(name1: str, name2: str) -> bool:
+    """
+    Fuzzy name match — handles Mohammad/Mohammed/Muhammad variations.
+    Returns True if at least one word overlaps between the two names
+    (after expanding known variants).
+    Phone number is the primary key — this is a secondary safety check.
+    """
+    if not name1 or not name2:
+        return True  # if one is missing, skip name check
+
+    words1 = _expand_name_words(normalize_name(name1).split())
+    words2 = _expand_name_words(normalize_name(name2).split())
+
+    return bool(words1 & words2)
+
+
 # ================= DAY-OF-WEEK ENGINE =================
 
 def _name_to_weekday(s: str):
-    """
-    Convert day name/abbreviation to int. 0=Monday, 6=Sunday.
-    """
+    """Convert day name/abbreviation to int. 0=Monday, 6=Sunday."""
     s = s.strip().lower()
     days = [
         "monday", "tuesday", "wednesday",
@@ -122,14 +160,9 @@ def _name_to_weekday(s: str):
 def parse_doctor_days(days_str: str) -> set:
     """
     Parse working days string into set of weekday ints.
-
-    Handles:
-        Daily
-        Monday to Saturday
-        Tuesday to Saturday
-        Monday to Friday
-        Mon-wed / Mon-Wed
-        Monday, Wednesday, Friday
+    Handles: Daily, Monday to Saturday, Tuesday to Saturday,
+             Monday to Friday, Mon-wed, Mon-Wed,
+             Monday, Wednesday, Friday (comma list)
     """
     s = days_str.strip().lower()
 
@@ -185,7 +218,7 @@ def get_doctors():
     return doctors_sheet.get_all_records()
 
 
-def get_doctor_row_by_name(doctor_name: str) -> dict | None:
+def get_doctor_row_by_name(doctor_name: str):
     """Fetch a single doctor row by name."""
     for d in get_doctors():
         if normalize_name(d.get("name", "")) == normalize_name(doctor_name):
@@ -236,26 +269,34 @@ def add_appointment(data):
 
 
 def cancel_appointment(name, phone):
+    """
+    Match by phone (primary) + fuzzy name (secondary).
+    Handles Mohammad/Mohammed spelling variations.
+    """
     rows = appointments_sheet.get_all_records()
     for i, r in enumerate(rows):
-        if (
-            normalize_name(r.get("patient_name", "")) == normalize_name(name)
-            and str(r.get("phone", "")).strip() == str(phone).strip()
-            and r.get("status", "") not in ["Cancelled"]
-        ):
+        phone_match = str(r.get("phone", "")).strip() == str(phone).strip()
+        name_ok     = names_match(r.get("patient_name", ""), name)
+        not_cancelled = r.get("status", "") not in ["Cancelled"]
+
+        if phone_match and name_ok and not_cancelled:
             appointments_sheet.update_cell(i + 2, 8, "Cancelled")
             return True
     return False
 
 
 def reschedule_appointment(name, phone, new_date, new_time):
+    """
+    Match by phone (primary) + fuzzy name (secondary).
+    Handles Mohammad/Mohammed spelling variations.
+    """
     rows = appointments_sheet.get_all_records()
     for i, r in enumerate(rows):
-        if (
-            normalize_name(r.get("patient_name", "")) == normalize_name(name)
-            and str(r.get("phone", "")).strip() == str(phone).strip()
-            and r.get("status", "") not in ["Cancelled"]
-        ):
+        phone_match = str(r.get("phone", "")).strip() == str(phone).strip()
+        name_ok     = names_match(r.get("patient_name", ""), name)
+        not_cancelled = r.get("status", "") not in ["Cancelled"]
+
+        if phone_match and name_ok and not_cancelled:
             appointments_sheet.update_cell(i + 2, 6, new_date)
             appointments_sheet.update_cell(i + 2, 7, normalize_time(new_time))
             appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
