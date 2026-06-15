@@ -2,124 +2,60 @@ import gspread
 import json
 import os
 import re
-
 from google.oauth2.service_account import Credentials
 from datetime import datetime, date
 
 # ================= GOOGLE SHEETS =================
-
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
 
-creds_dict = json.loads(
-    os.environ["GOOGLE_CREDENTIALS"]
-)
+creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+if creds_json:
+    creds_dict = json.loads(creds_json)
+else:
+    with open("credentials.json") as f:
+        creds_dict = json.load(f)
 
-creds = Credentials.from_service_account_info(
-    creds_dict,
-    scopes=SCOPES
-)
-
+creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 client = gspread.authorize(creds)
 
-sheet = client.open("hospital_db")
-
-doctors_sheet = sheet.worksheet("Doctors")
-appointments_sheet = sheet.worksheet("Appointments")
-
-try:
-    leaves_sheet = sheet.worksheet("DoctorLeaves")
-except Exception:
-    leaves_sheet = None
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "your_spreadsheet_id_here")
+spreadsheet = client.open_by_key(SPREADSHEET_ID)
+doctors_sheet = spreadsheet.worksheet("Doctors")
+appointments_sheet = spreadsheet.worksheet("Appointments")
 
 
-# ================= HELPERS =================
+# ================= NAME NORMALIZATION =================
 
-def now():
-    return datetime.utcnow().isoformat()
-
-
-def next_id(sheet_obj):
-    records = sheet_obj.get_all_records()
-    if not records:
-        return 1
-    ids = []
-    for r in records:
-        try:
-            ids.append(int(r.get("id", 0)))
-        except Exception:
-            pass
-    return max(ids) + 1 if ids else 1
-
-
-# ================= NORMALIZATION =================
-
-def normalize_time(time_str):
-    """
-    Converts any time input to HH:MM 24-hour format for DB storage.
-    Handles: 9am, 9 AM, 09:00 AM, 09:00, 9:00 AM, etc.
-    """
-    try:
-        if not time_str:
-            return ""
-        t = str(time_str).strip()
-        t = re.sub(r'\s+', ' ', t).strip()
-        upper = t.upper()
-
-        for fmt in ["%I:%M %p", "%I:%M%p"]:
-            try:
-                dt = datetime.strptime(upper, fmt)
-                return dt.strftime("%H:%M")
-            except ValueError:
-                pass
-
-        for fmt in ["%I %p", "%I%p"]:
-            try:
-                dt = datetime.strptime(upper, fmt)
-                return dt.strftime("%H:%M")
-            except ValueError:
-                pass
-
-        if ":" in t and len(t) <= 5:
-            try:
-                dt = datetime.strptime(t, "%H:%M")
-                return dt.strftime("%H:%M")
-            except ValueError:
-                pass
-
-        return t.lower()
-    except Exception:
-        return str(time_str).strip().lower()
-
-
-def normalize_name(name):
-    return str(name).strip().lower()
-
-
-def normalize_date(date_val):
-    return str(date_val).strip()
-
-
-# ================= FUZZY NAME MATCHING =================
-
-# Common Arabic/Pakistani name spelling variants
 NAME_VARIANTS = {
-    "mohammad": ["mohammed", "muhammad", "mohd", "md", "mohamad"],
-    "mohammed": ["mohammad", "muhammad", "mohd", "md", "mohamad"],
-    "muhammad": ["mohammad", "mohammed", "mohd", "md", "mohamad"],
-    "mohamad":  ["mohammad", "mohammed", "muhammad", "mohd"],
-    "mohd":     ["mohammad", "mohammed", "muhammad", "md"],
-    "ali":      ["aly"],
+    "mohammad": ["mohammed", "muhammad", "mohd", "md", "mohamad", "muhammed"],
+    "mohammed": ["mohammad", "muhammad", "mohd", "md", "mohamad", "muhammed"],
+    "muhammad": ["mohammad", "mohammed", "mohd", "md", "mohamad", "muhammed"],
+    "mohd":     ["mohammad", "mohammed", "muhammad", "md", "mohamad"],
+    "mohamad":  ["mohammad", "mohammed", "muhammad"],
+    "muhammed": ["mohammad", "mohammed", "muhammad"],
     "hassan":   ["hasan"],
-    "hussain":  ["husain", "hussein", "husein"],
+    "hasan":    ["hassan"],
+    "hussain":  ["hussein", "husain", "husein"],
+    "hussein":  ["hussain", "husain", "husein"],
     "usman":    ["uthman", "osman"],
-    "zainab":   ["zaynab", "zenab"],
-    "fatima":   ["fatimah", "fateema"],
+    "uthman":   ["usman", "osman"],
+    "fatima":   ["fatimah", "fatemah"],
+    "fatimah":  ["fatima", "fatemah"],
+    "ayesha":   ["aisha", "aysha", "aiesha"],
+    "aisha":    ["ayesha", "aysha"],
+    "ali":      ["aly"],
+    "bilal":    ["bilaal"],
+    "omar":     ["umar", "umer"],
+    "umar":     ["omar", "umer"],
 }
 
-def _expand_name_words(words: list) -> set:
+def normalize_name(name: str) -> str:
+    return name.strip().lower()
+
+def expand_words(words: list) -> set:
     expanded = set(words)
     for w in words:
         if w in NAME_VARIANTS:
@@ -128,116 +64,154 @@ def _expand_name_words(words: list) -> set:
 
 def names_match(name1: str, name2: str) -> bool:
     """
-    Fuzzy name match — handles Mohammad/Mohammed/Muhammad variations.
-    Returns True if at least one word overlaps between the two names
-    (after expanding known variants).
-    Phone number is the primary key — this is a secondary safety check.
+    Fuzzy name match — handles Pakistani/Arabic name spelling variations.
+    Strategy:
+    - If both names have 2+ words (full names), LAST WORD (surname) must match exactly,
+      and at least one first-name word must match (with variants).
+    - If either name is single word, any word overlap is enough.
     """
-    if not name1 or not name2:
-        return True  # if one is missing, skip name check
+    n1_words = normalize_name(name1).split()
+    n2_words = normalize_name(name2).split()
 
-    words1 = _expand_name_words(normalize_name(name1).split())
-    words2 = _expand_name_words(normalize_name(name2).split())
+    if not n1_words or not n2_words:
+        return False
 
-    return bool(words1 & words2)
+    # Single word names — any overlap
+    if len(n1_words) == 1 or len(n2_words) == 1:
+        set1 = expand_words(n1_words)
+        set2 = expand_words(n2_words)
+        return bool(set1 & set2)
+
+    # Full names — last name must match exactly
+    if n1_words[-1] != n2_words[-1]:
+        return False
+
+    # First names — fuzzy match with variants
+    first1 = expand_words(n1_words[:-1])
+    first2 = expand_words(n2_words[:-1])
+    return bool(first1 & first2)
 
 
-# ================= DAY-OF-WEEK ENGINE =================
+# ================= TIME NORMALIZATION =================
 
-def _name_to_weekday(s: str):
-    """Convert day name/abbreviation to int. 0=Monday, 6=Sunday."""
-    s = s.strip().lower()
-    days = [
-        "monday", "tuesday", "wednesday",
-        "thursday", "friday", "saturday", "sunday"
-    ]
-    for i, d in enumerate(days):
-        if d.startswith(s[:3]):
-            return i
-    return None
+def normalize_time(time_str: str) -> str:
+    """Convert any time format to HH:MM for storage."""
+    time_str = time_str.strip().upper()
+    
+    # Already in HH:MM 24h
+    if re.match(r'^\d{1,2}:\d{2}$', time_str):
+        h, m = time_str.split(":")
+        return f"{int(h):02d}:{int(m):02d}"
+    
+    # 12h format: 7:00 PM, 07:00 PM, 7 PM
+    match = re.match(r'^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$', time_str)
+    if match:
+        h = int(match.group(1))
+        m = int(match.group(2) or 0)
+        period = match.group(3)
+        if period == "PM" and h != 12:
+            h += 12
+        elif period == "AM" and h == 12:
+            h = 0
+        return f"{h:02d}:{m:02d}"
+    
+    return time_str
 
+
+# ================= DAY OF WEEK PARSING =================
+
+DAY_MAP = {
+    "monday": 0, "mon": 0,
+    "tuesday": 1, "tue": 1, "tues": 1,
+    "wednesday": 2, "wed": 2,
+    "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
+    "friday": 4, "fri": 4,
+    "saturday": 5, "sat": 5,
+    "sunday": 6, "sun": 6,
+}
+
+DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 def parse_doctor_days(days_str: str) -> set:
     """
-    Parse working days string into set of weekday ints.
-    Handles: Daily, Monday to Saturday, Tuesday to Saturday,
-             Monday to Friday, Mon-wed, Mon-Wed,
-             Monday, Wednesday, Friday (comma list)
+    Parse doctor working days string into a set of weekday integers (0=Mon, 6=Sun).
+    Handles: Daily, Monday to Saturday, Mon-wed, Tuesday to Saturday, etc.
     """
+    if not days_str:
+        return set(range(7))
+    
     s = days_str.strip().lower()
-
+    
     if s == "daily":
         return set(range(7))
-
-    # Range: "monday to saturday" or "mon-wed"
-    range_match = re.match(r'(\w+)\s*(?:to|-)\s*(\w+)', s)
-    if range_match:
-        start = _name_to_weekday(range_match.group(1))
-        end   = _name_to_weekday(range_match.group(2))
+    
+    # "Monday to Saturday" or "Mon-wed" patterns
+    sep_match = re.match(r'(\w+)\s+to\s+(\w+)', s) or re.match(r'(\w+)-(\w+)', s)
+    if sep_match:
+        start_word = sep_match.group(1)
+        end_word = sep_match.group(2)
+        start = DAY_MAP.get(start_word)
+        end = DAY_MAP.get(end_word)
         if start is not None and end is not None:
-            if end >= start:
+            if start <= end:
                 return set(range(start, end + 1))
             else:
-                return set(list(range(start, 7)) + list(range(0, end + 1)))
-
-    # Comma-separated
-    parts = [p.strip() for p in s.split(",")]
+                # Wraps around (e.g., Friday to Tuesday)
+                return set(range(start, 7)) | set(range(0, end + 1))
+    
+    # Single day
+    if s in DAY_MAP:
+        return {DAY_MAP[s]}
+    
+    # Comma-separated list
     result = set()
-    for p in parts:
-        n = _name_to_weekday(p)
-        if n is not None:
-            result.add(n)
+    for part in re.split(r'[,/]', s):
+        part = part.strip()
+        if part in DAY_MAP:
+            result.add(DAY_MAP[part])
     if result:
         return result
+    
+    # Default: all days
+    return set(range(7))
 
-    return set(range(7))  # fallback: all days
 
-
-def is_doctor_working_on_date(doctor_row: dict, date_str: str) -> bool:
-    """Returns True if doctor works on the weekday of date_str."""
+def is_doctor_working_on_date(doctor_days_str: str, check_date: str) -> tuple:
+    """
+    Returns (is_working: bool, day_name: str)
+    check_date format: YYYY-MM-DD
+    """
     try:
-        d = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+        d = datetime.strptime(check_date, "%Y-%m-%d").date()
         weekday = d.weekday()  # 0=Mon, 6=Sun
-        working_days = parse_doctor_days(doctor_row.get("days", "Daily"))
-        return weekday in working_days
+        working_days = parse_doctor_days(doctor_days_str)
+        return (weekday in working_days), DAY_NAMES[weekday]
     except Exception:
-        return True  # fail open
-
-
-def get_day_name(date_str: str) -> str:
-    try:
-        d = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
-        return d.strftime("%A")
-    except Exception:
-        return ""
+        return True, "Unknown"
 
 
 # ================= DOCTORS =================
 
 def get_doctors():
-    return doctors_sheet.get_all_records()
+    rows = doctors_sheet.get_all_records()
+    result = []
+    for i, r in enumerate(rows):
+        result.append({
+            "id": i + 1,
+            "name": r.get("name", ""),
+            "specialty": r.get("specialty", ""),
+            "days": r.get("days", ""),
+            "start_time": r.get("start_time", ""),
+            "end_time": r.get("end_time", ""),
+            "fee": r.get("fee", ""),
+            "timestamp": r.get("timestamp", ""),
+        })
+    return result
 
-
-def get_doctor_row_by_name(doctor_name: str):
-    """Fetch a single doctor row by name."""
-    for d in get_doctors():
-        if normalize_name(d.get("name", "")) == normalize_name(doctor_name):
-            return d
-    return None
-
-
-def add_doctor(data):
-    doctors_sheet.append_row([
-        next_id(doctors_sheet),
-        data.get("name", ""),
-        data.get("specialty", ""),
-        data.get("days", ""),
-        data.get("start_time", ""),
-        data.get("end_time", ""),
-        data.get("fee", ""),
-        now()
-    ])
-
+def add_doctor(name, specialty, days, start_time, end_time, fee):
+    timestamp = datetime.now().isoformat()
+    doctors_sheet.append_row([name, specialty, days, start_time, end_time, fee, timestamp])
+    return True
 
 def delete_doctor(name):
     rows = doctors_sheet.get_all_records()
@@ -247,97 +221,164 @@ def delete_doctor(name):
             return True
     return False
 
+def get_doctor_row_by_name(name: str):
+    """Return full doctor row dict or None."""
+    rows = doctors_sheet.get_all_records()
+    for r in rows:
+        if normalize_name(r.get("name", "")) == normalize_name(name):
+            return r
+    return None
+
 
 # ================= APPOINTMENTS =================
 
 def get_appointments():
-    return appointments_sheet.get_all_records()
+    rows = appointments_sheet.get_all_records()
+    result = []
+    for i, r in enumerate(rows):
+        result.append({
+            "id": i + 1,
+            "patient_name": r.get("patient_name", ""),
+            "phone": r.get("phone", ""),
+            "reason": r.get("reason", ""),
+            "doctor": r.get("doctor", ""),
+            "date": r.get("date", ""),
+            "time": r.get("time", ""),
+            "status": r.get("status", ""),
+            "timestamp": r.get("timestamp", ""),
+        })
+    return result
 
-
-def add_appointment(data):
+def add_appointment(patient_name, phone, reason, doctor, appt_date, appt_time):
+    timestamp = datetime.now().isoformat()
+    normalized_time = normalize_time(appt_time)
     appointments_sheet.append_row([
-        next_id(appointments_sheet),
-        data.get("patient_name", ""),
-        data.get("phone", ""),
-        data.get("reason", ""),
-        data.get("doctor", ""),
-        data.get("date", ""),
-        normalize_time(data.get("time", "")),
-        "Booked",
-        now()
+        patient_name, phone, reason, doctor,
+        appt_date, normalized_time, "Booked", timestamp
     ])
-
+    return True
 
 def cancel_appointment(name, phone):
     """
-    Match by phone (primary) + fuzzy name (secondary).
-    Handles Mohammad/Mohammed spelling variations.
+    Cancel appointment — match by phone (primary) + fuzzy name (secondary).
+    Phone must match. Name fuzzy matched to prevent family member conflicts.
     """
     rows = appointments_sheet.get_all_records()
     for i, r in enumerate(rows):
         phone_match = str(r.get("phone", "")).strip() == str(phone).strip()
-        name_ok     = names_match(r.get("patient_name", ""), name)
-        not_cancelled = r.get("status", "") not in ["Cancelled"]
+        name_ok = names_match(r.get("patient_name", ""), name)
+        status_ok = r.get("status", "") not in ["Cancelled"]
 
-        if phone_match and name_ok and not_cancelled:
-            appointments_sheet.update_cell(i + 2, 8, "Cancelled")
+        if phone_match and name_ok and status_ok:
+            appointments_sheet.update_cell(i + 2, 7, "Cancelled")
             return True
     return False
-
 
 def reschedule_appointment(name, phone, new_date, new_time):
     """
-    Match by phone (primary) + fuzzy name (secondary).
-    Handles Mohammad/Mohammed spelling variations.
+    Reschedule appointment — match by phone (primary) + fuzzy name (secondary).
+    Phone must match. Name fuzzy matched to prevent family member conflicts.
     """
     rows = appointments_sheet.get_all_records()
+    normalized_time = normalize_time(new_time)
     for i, r in enumerate(rows):
         phone_match = str(r.get("phone", "")).strip() == str(phone).strip()
-        name_ok     = names_match(r.get("patient_name", ""), name)
-        not_cancelled = r.get("status", "") not in ["Cancelled"]
+        name_ok = names_match(r.get("patient_name", ""), name)
+        status_ok = r.get("status", "") not in ["Cancelled"]
 
-        if phone_match and name_ok and not_cancelled:
-            appointments_sheet.update_cell(i + 2, 6, new_date)
-            appointments_sheet.update_cell(i + 2, 7, normalize_time(new_time))
-            appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
+        if phone_match and name_ok and status_ok:
+            appointments_sheet.update_cell(i + 2, 5, new_date)
+            appointments_sheet.update_cell(i + 2, 6, normalized_time)
+            appointments_sheet.update_cell(i + 2, 7, "Rescheduled")
             return True
     return False
 
 
-# ================= AVAILABILITY =================
+# ================= AVAILABILITY CHECK =================
 
-def check_availability(doctor, date):
-    """Returns list of booked 24h time strings for that doctor+date."""
-    appointments = appointments_sheet.get_all_records()
-    booked = []
-    for a in appointments:
-        if (
-            normalize_name(str(a.get("doctor", ""))) == normalize_name(doctor)
-            and normalize_date(a.get("date", "")) == normalize_date(date)
-            and a.get("status", "") in ["Booked", "Rescheduled"]
-        ):
-            booked.append(normalize_time(str(a.get("time", ""))))
-    return booked
+def check_availability(doctor_name: str, check_date: str):
+    """
+    Check if doctor is available on given date and return open slots.
+    Returns dict with: available, available_slots, day, message, day_check_failed
+    """
+    doctor = get_doctor_row_by_name(doctor_name)
+    if not doctor:
+        return {
+            "success": False,
+            "available": False,
+            "message": f"Doctor '{doctor_name}' not found in system."
+        }
 
+    # Step 1 — Day of week check
+    is_working, day_name = is_doctor_working_on_date(doctor.get("days", ""), check_date)
+    if not is_working:
+        return {
+            "success": True,
+            "available": False,
+            "day_check_failed": True,
+            "day": day_name,
+            "date": check_date,
+            "doctor": doctor.get("name", doctor_name),
+            "working_days": doctor.get("days", ""),
+            "message": (
+                f"Doctor {doctor.get('name', doctor_name)} does not work on {day_name}s. "
+                f"Working days: {doctor.get('days', 'N/A')}. "
+                f"Please ask the patient to choose a different date."
+            )
+        }
 
-def is_slot_available(doctor, date, time):
-    booked = check_availability(doctor, date)
-    return normalize_time(time) not in booked
-
-
-# ================= DOCTOR LEAVES =================
-
-def is_doctor_on_leave(doctor, date):
-    if not leaves_sheet:
-        return False
+    # Step 2 — Generate slots from doctor's actual hours
     try:
-        leaves = leaves_sheet.get_all_records()
-        for leave in leaves:
-            if (
-                normalize_name(str(leave.get("doctor", ""))) == normalize_name(doctor)
-                and normalize_date(str(leave.get("date", ""))) == normalize_date(date)
-            ):
-                return True
-    except Exception:
-        return False
-    return False
+        start_dt = datetime.strptime(doctor.get("start_time", "09:00"), "%H:%M")
+        end_dt = datetime.strptime(doctor.get("end_time", "17:00"), "%H:%M")
+    except ValueError:
+        start_dt = datetime.strptime("09:00", "%H:%M")
+        end_dt = datetime.strptime("17:00", "%H:%M")
+
+    all_slots = []
+    current = start_dt
+    while current < end_dt:
+        all_slots.append(current.strftime("%I:%M %p"))
+        current = current.replace(hour=current.hour + 1)
+
+    # Step 3 — Remove already booked slots
+    booked = set()
+    rows = appointments_sheet.get_all_records()
+    for r in rows:
+        if (
+            normalize_name(r.get("doctor", "")) == normalize_name(doctor_name)
+            and r.get("date", "") == check_date
+            and r.get("status", "") not in ["Cancelled"]
+        ):
+            booked.add(normalize_time(r.get("time", "")))
+
+    available_slots = []
+    for slot in all_slots:
+        slot_normalized = normalize_time(slot)
+        if slot_normalized not in booked:
+            available_slots.append(slot)
+
+    if not available_slots:
+        return {
+            "success": True,
+            "available": False,
+            "day_check_failed": False,
+            "day": day_name,
+            "date": check_date,
+            "doctor": doctor.get("name", doctor_name),
+            "message": f"No available slots for {doctor.get('name', doctor_name)} on {check_date} ({day_name}). All slots are booked."
+        }
+
+    return {
+        "success": True,
+        "available": True,
+        "day_check_failed": False,
+        "day": day_name,
+        "date": check_date,
+        "doctor": doctor.get("name", doctor_name),
+        "available_slots": available_slots,
+        "message": (
+            f"Available slots for {doctor.get('name', doctor_name)} on "
+            f"{check_date} ({day_name}): {', '.join(available_slots)}"
+        )
+    }
