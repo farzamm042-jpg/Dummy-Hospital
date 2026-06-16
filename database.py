@@ -11,7 +11,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON") or os.environ.get("GOOGLE_CREDENTIALS")
 if creds_json:
     creds_dict = json.loads(creds_json)
 else:
