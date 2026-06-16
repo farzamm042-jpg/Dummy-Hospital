@@ -285,6 +285,16 @@ def add_appointment(patient_name, phone, reason, doctor, appt_date, appt_time):
     return True
 
 
+def phones_match(p1: str, p2: str) -> bool:
+    """
+    Compare phone numbers ignoring leading zeros and spaces.
+    '03320240092' == '3320240092' → True
+    """
+    d1 = str(p1).strip().lstrip("0")
+    d2 = str(p2).strip().lstrip("0")
+    return d1 == d2
+
+
 def _find_target_row(name: str, phone: str):
     """
     Find the single best matching active appointment row index (0-based in records list).
@@ -297,12 +307,11 @@ def _find_target_row(name: str, phone: str):
     Returns (row_index, record) or (None, None)
     """
     rows = appointments_sheet.get_all_records()
-    phone_clean = str(phone).strip()
 
-    # All active records for this phone
+    # All active records for this phone (leading-zero tolerant)
     active = [
         (i, r) for i, r in enumerate(rows)
-        if str(r.get("phone", "")).strip() == phone_clean
+        if phones_match(r.get("phone", ""), phone)
         and r.get("status", "") not in ["Cancelled"]
     ]
 
