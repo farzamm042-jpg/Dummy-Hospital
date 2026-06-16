@@ -319,38 +319,77 @@ def add_appointment(patient_name, phone, reason, doctor, appt_date, appt_time):
 
 def cancel_appointment(name, phone):
     """
-    Cancel — match by phone (primary) + fuzzy name (secondary).
+    Cancel — phone is the PRIMARY identifier. Name is used as a tie-breaker
+    ONLY when the same phone number has multiple active appointments
+    (e.g. family members sharing one phone). If a phone number has just
+    ONE active appointment, it is cancelled regardless of name spelling —
+    this avoids failures caused by empty/garbled name fields from the voice agent.
     Sheet columns: id(1) patient_name(2) phone(3) reason(4) doctor(5) date(6) time(7) status(8) timestamp(9)
     """
     rows = appointments_sheet.get_all_records()
-    for i, r in enumerate(rows):
-        phone_match = str(r.get("phone", "")).strip() == str(phone).strip()
-        name_ok = names_match(r.get("patient_name", ""), name)
-        status_ok = r.get("status", "") not in ["Cancelled"]
+    phone_clean = str(phone).strip()
 
-        if phone_match and name_ok and status_ok:
+    # Find all active appointments for this phone number
+    candidates = [
+        (i, r) for i, r in enumerate(rows)
+        if str(r.get("phone", "")).strip() == phone_clean
+        and r.get("status", "") not in ["Cancelled"]
+    ]
+
+    if not candidates:
+        return False
+
+    if len(candidates) == 1:
+        i, _ = candidates[0]
+        appointments_sheet.update_cell(i + 2, 8, "Cancelled")
+        return True
+
+    # Multiple active appointments on this phone — use fuzzy name to pick the right one
+    for i, r in candidates:
+        if names_match(r.get("patient_name", ""), name):
             appointments_sheet.update_cell(i + 2, 8, "Cancelled")
             return True
+
     return False
 
 
 def reschedule_appointment(name, phone, new_date, new_time):
     """
-    Reschedule — match by phone (primary) + fuzzy name (secondary).
+    Reschedule — phone is the PRIMARY identifier. Name is used as a tie-breaker
+    ONLY when the same phone number has multiple active appointments
+    (e.g. family members sharing one phone). If a phone number has just
+    ONE active appointment, it is rescheduled regardless of name spelling —
+    this avoids failures caused by empty/garbled name fields from the voice agent.
     Sheet columns: id(1) patient_name(2) phone(3) reason(4) doctor(5) date(6) time(7) status(8) timestamp(9)
     """
     rows = appointments_sheet.get_all_records()
     normalized_time = normalize_time(new_time)
-    for i, r in enumerate(rows):
-        phone_match = str(r.get("phone", "")).strip() == str(phone).strip()
-        name_ok = names_match(r.get("patient_name", ""), name)
-        status_ok = r.get("status", "") not in ["Cancelled"]
+    phone_clean = str(phone).strip()
 
-        if phone_match and name_ok and status_ok:
+    candidates = [
+        (i, r) for i, r in enumerate(rows)
+        if str(r.get("phone", "")).strip() == phone_clean
+        and r.get("status", "") not in ["Cancelled"]
+    ]
+
+    if not candidates:
+        return False
+
+    if len(candidates) == 1:
+        i, _ = candidates[0]
+        appointments_sheet.update_cell(i + 2, 6, new_date)
+        appointments_sheet.update_cell(i + 2, 7, normalized_time)
+        appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
+        return True
+
+    # Multiple active appointments on this phone — use fuzzy name to pick the right one
+    for i, r in candidates:
+        if names_match(r.get("patient_name", ""), name):
             appointments_sheet.update_cell(i + 2, 6, new_date)
             appointments_sheet.update_cell(i + 2, 7, normalized_time)
             appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
             return True
+
     return False
 
 
