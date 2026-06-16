@@ -113,6 +113,59 @@ def normalize_time_24h(t: str) -> str:
     return t
 
 
+def resolve_date(date_str: str) -> str:
+    """
+    Converts relative/sloppy date phrases into YYYY-MM-DD using the SERVER's
+    real current date — never trusts AI-calculated dates.
+    Falls back to returning the cleaned input if no relative phrase is found,
+    so a properly formatted YYYY-MM-DD still passes straight through.
+    """
+    if not date_str:
+        return date_str
+
+    s = date_str.strip().lower()
+    today = date.today()
+
+    relative_map = {
+        "today": today,
+        "tonight": today,
+        "tomorrow": today + timedelta(days=1),
+        "tmrw": today + timedelta(days=1),
+        "day after tomorrow": today + timedelta(days=2),
+        "next day": today + timedelta(days=1),
+    }
+    if s in relative_map:
+        return relative_map[s].strftime("%Y-%m-%d")
+
+    # Already valid YYYY-MM-DD
+    try:
+        d = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+        # SAFETY NET: if the AI sent an obviously wrong/past year
+        # (common hallucination, e.g. stuck on training-data year),
+        # but month+day are valid, snap the year forward to a sane value.
+        if d.year < today.year:
+            try:
+                corrected = d.replace(year=today.year)
+                if corrected < today:
+                    corrected = d.replace(year=today.year + 1)
+                return corrected.strftime("%Y-%m-%d")
+            except ValueError:
+                return date_str.strip()
+        return date_str.strip()
+    except Exception:
+        pass
+
+    # Try common alternative formats (DD-MM-YYYY, MM/DD/YYYY, etc.)
+    for fmt in ["%d-%m-%Y", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d"]:
+        try:
+            d = datetime.strptime(date_str.strip(), fmt).date()
+            return d.strftime("%Y-%m-%d")
+        except Exception:
+            continue
+
+    return date_str.strip()
+
+
 def validate_date(date_str: str) -> bool:
     try:
         d = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
@@ -212,7 +265,7 @@ def delete(data: Doctor):
 @app.post("/check_availability")
 def availability(data: Availability):
     doctor = normalize_text(data.doctor)
-    d = data.date.strip()
+    d = resolve_date(data.date.strip())
     day_name = get_day_name(d)
 
     # 1. Date validation
@@ -301,7 +354,7 @@ def book(data: Appointment):
     name = normalize_text(data.patient_name)
     phone = normalize_phone(data.phone)
     reason = normalize_text(data.reason)
-    date_str = data.date.strip()
+    date_str = resolve_date(data.date.strip())
     day_name = get_day_name(date_str)
     time_12h = normalize_time_12h(data.time)
     time_24h = normalize_time_24h(data.time)
@@ -363,7 +416,7 @@ def cancel(data: Cancel):
 def reschedule(data: Reschedule):
     name = normalize_text(data.patient_name)
     phone = normalize_phone(data.phone)
-    new_date = data.new_date.strip()
+    new_date = resolve_date(data.new_date.strip())
     new_time_24 = normalize_time_24h(data.new_time)
     new_time_12 = normalize_time_12h(data.new_time)
     day_name = get_day_name(new_date)
