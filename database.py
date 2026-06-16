@@ -11,7 +11,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON") or os.environ.get("GOOGLE_CREDENTIALS")
+creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 if creds_json:
     creds_dict = json.loads(creds_json)
 else:
@@ -306,8 +306,12 @@ def get_appointments():
 def add_appointment(patient_name, phone, reason, doctor, appt_date, appt_time):
     timestamp = datetime.now().isoformat()
     normalized_time = normalize_time(appt_time)
+    # Sheet column order: id | patient_name | phone | reason | doctor | date | time | status | timestamp
+    # "id" column is just the row's serial number for human reference.
+    existing_rows = appointments_sheet.get_all_values()
+    next_id = len(existing_rows)  # header is row 1, so len(existing_rows) gives next serial number
     appointments_sheet.append_row([
-        patient_name, phone, reason, doctor,
+        next_id, patient_name, phone, reason, doctor,
         appt_date, normalized_time, "Booked", timestamp
     ])
     return True
@@ -316,6 +320,7 @@ def add_appointment(patient_name, phone, reason, doctor, appt_date, appt_time):
 def cancel_appointment(name, phone):
     """
     Cancel — match by phone (primary) + fuzzy name (secondary).
+    Sheet columns: id(1) patient_name(2) phone(3) reason(4) doctor(5) date(6) time(7) status(8) timestamp(9)
     """
     rows = appointments_sheet.get_all_records()
     for i, r in enumerate(rows):
@@ -324,7 +329,7 @@ def cancel_appointment(name, phone):
         status_ok = r.get("status", "") not in ["Cancelled"]
 
         if phone_match and name_ok and status_ok:
-            appointments_sheet.update_cell(i + 2, 7, "Cancelled")
+            appointments_sheet.update_cell(i + 2, 8, "Cancelled")
             return True
     return False
 
@@ -332,6 +337,7 @@ def cancel_appointment(name, phone):
 def reschedule_appointment(name, phone, new_date, new_time):
     """
     Reschedule — match by phone (primary) + fuzzy name (secondary).
+    Sheet columns: id(1) patient_name(2) phone(3) reason(4) doctor(5) date(6) time(7) status(8) timestamp(9)
     """
     rows = appointments_sheet.get_all_records()
     normalized_time = normalize_time(new_time)
@@ -341,9 +347,9 @@ def reschedule_appointment(name, phone, new_date, new_time):
         status_ok = r.get("status", "") not in ["Cancelled"]
 
         if phone_match and name_ok and status_ok:
-            appointments_sheet.update_cell(i + 2, 5, new_date)
-            appointments_sheet.update_cell(i + 2, 6, normalized_time)
-            appointments_sheet.update_cell(i + 2, 7, "Rescheduled")
+            appointments_sheet.update_cell(i + 2, 6, new_date)
+            appointments_sheet.update_cell(i + 2, 7, normalized_time)
+            appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
             return True
     return False
 
