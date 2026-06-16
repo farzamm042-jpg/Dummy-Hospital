@@ -63,11 +63,6 @@ def expand_words(words: list) -> set:
     return expanded
 
 def names_match(name1: str, name2: str) -> bool:
-    """
-    Fuzzy name match — handles Pakistani/Arabic name spelling variations.
-    - Full names: last word (surname) must match exactly, first name fuzzy matched.
-    - Single word names: any overlap is enough.
-    """
     n1_words = normalize_name(name1).split()
     n2_words = normalize_name(name2).split()
 
@@ -79,11 +74,9 @@ def names_match(name1: str, name2: str) -> bool:
         set2 = expand_words(n2_words)
         return bool(set1 & set2)
 
-    # Full names — last name must match exactly
     if n1_words[-1] != n2_words[-1]:
         return False
 
-    # First names — fuzzy match with variants
     first1 = expand_words(n1_words[:-1])
     first2 = expand_words(n2_words[:-1])
     return bool(first1 & first2)
@@ -92,17 +85,14 @@ def names_match(name1: str, name2: str) -> bool:
 # ================= TIME NORMALIZATION =================
 
 def normalize_time(time_str: str) -> str:
-    """Convert any time format to HH:MM 24h for storage."""
     if not time_str:
         return time_str
     time_str = str(time_str).strip().upper()
 
-    # Already HH:MM 24h
     if re.match(r'^\d{1,2}:\d{2}$', time_str):
         h, m = time_str.split(":")
         return f"{int(h):02d}:{int(m):02d}"
 
-    # 12h format: 7:00 PM, 07:00 PM, 7 PM
     match = re.match(r'^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$', time_str)
     if match:
         h = int(match.group(1))
@@ -133,7 +123,6 @@ DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 
 
 def get_day_name(date_str: str) -> str:
-    """Return day name (e.g. 'Monday') for a YYYY-MM-DD string."""
     try:
         d = datetime.strptime(date_str, "%Y-%m-%d").date()
         return DAY_NAMES[d.weekday()]
@@ -142,10 +131,6 @@ def get_day_name(date_str: str) -> str:
 
 
 def parse_doctor_days(days_str: str) -> set:
-    """
-    Parse doctor working days string into a set of weekday integers (0=Mon, 6=Sun).
-    Handles: Daily, Monday to Saturday, Mon-Wed, Tuesday to Saturday, etc.
-    """
     if not days_str:
         return set(range(7))
 
@@ -154,7 +139,6 @@ def parse_doctor_days(days_str: str) -> set:
     if s == "daily":
         return set(range(7))
 
-    # "Monday to Saturday" or "Mon-Wed"
     sep_match = re.match(r'(\w+)\s+to\s+(\w+)', s) or re.match(r'(\w+)-(\w+)', s)
     if sep_match:
         start_word = sep_match.group(1)
@@ -182,11 +166,6 @@ def parse_doctor_days(days_str: str) -> set:
 
 
 def is_doctor_working_on_date(doctor_row_or_days, check_date: str) -> bool:
-    """
-    Returns True if doctor works on the given date.
-    Accepts either a doctor dict (row) or a days string directly.
-    check_date format: YYYY-MM-DD
-    """
     try:
         if isinstance(doctor_row_or_days, dict):
             days_str = doctor_row_or_days.get("days", "")
@@ -202,10 +181,6 @@ def is_doctor_working_on_date(doctor_row_or_days, check_date: str) -> bool:
 
 
 def is_doctor_on_leave(doctor_name: str, check_date: str) -> bool:
-    """
-    Returns True if doctor is on leave on given date.
-    Leave is stored as status='Leave' in appointments sheet with the doctor's name.
-    """
     try:
         rows = appointments_sheet.get_all_records()
         for r in rows:
@@ -221,10 +196,6 @@ def is_doctor_on_leave(doctor_name: str, check_date: str) -> bool:
 
 
 def is_slot_available(doctor_name: str, check_date: str, time_24h: str) -> bool:
-    """
-    Returns True if the given slot is NOT already booked for this doctor/date.
-    time_24h should be in HH:MM format.
-    """
     try:
         rows = appointments_sheet.get_all_records()
         for r in rows:
@@ -234,8 +205,8 @@ def is_slot_available(doctor_name: str, check_date: str, time_24h: str) -> bool:
                 and normalize_time(r.get("time", "")) == normalize_time(time_24h)
                 and r.get("status", "") not in ["Cancelled"]
             ):
-                return False  # Slot is taken
-        return True  # Slot is free
+                return False
+        return True
     except Exception:
         return True
 
@@ -275,7 +246,6 @@ def delete_doctor(name):
 
 
 def get_doctor_row_by_name(name: str):
-    """Return full doctor row dict or None."""
     rows = doctors_sheet.get_all_records()
     for r in rows:
         if normalize_name(r.get("name", "")) == normalize_name(name):
@@ -306,10 +276,8 @@ def get_appointments():
 def add_appointment(patient_name, phone, reason, doctor, appt_date, appt_time):
     timestamp = datetime.now().isoformat()
     normalized_time = normalize_time(appt_time)
-    # Sheet column order: id | patient_name | phone | reason | doctor | date | time | status | timestamp
-    # "id" column is just the row's serial number for human reference.
     existing_rows = appointments_sheet.get_all_values()
-    next_id = len(existing_rows)  # header is row 1, so len(existing_rows) gives next serial number
+    next_id = len(existing_rows)
     appointments_sheet.append_row([
         next_id, patient_name, phone, reason, doctor,
         appt_date, normalized_time, "Booked", timestamp
@@ -317,89 +285,80 @@ def add_appointment(patient_name, phone, reason, doctor, appt_date, appt_time):
     return True
 
 
-def cancel_appointment(name, phone):
+def _find_target_row(name: str, phone: str):
     """
-    Cancel — phone is the PRIMARY identifier. Name is used as a tie-breaker
-    ONLY when the same phone number has multiple active appointments
-    (e.g. family members sharing one phone). If a phone number has just
-    ONE active appointment, it is cancelled regardless of name spelling —
-    this avoids failures caused by empty/garbled name fields from the voice agent.
-    Sheet columns: id(1) patient_name(2) phone(3) reason(4) doctor(5) date(6) time(7) status(8) timestamp(9)
+    Find the single best matching active appointment row index (0-based in records list).
+
+    Priority:
+    1. Phone + name both match → most recent (highest index)
+    2. Phone matches + only ONE active record → cancel/reschedule it regardless of name
+       (handles cases where AI sends slightly different name or empty string)
+
+    Returns (row_index, record) or (None, None)
     """
     rows = appointments_sheet.get_all_records()
     phone_clean = str(phone).strip()
 
-    # Find all active appointments for this phone number
-    candidates = [
+    # All active records for this phone
+    active = [
         (i, r) for i, r in enumerate(rows)
         if str(r.get("phone", "")).strip() == phone_clean
         and r.get("status", "") not in ["Cancelled"]
     ]
 
-    if not candidates:
-        return False
+    if not active:
+        return None, None
 
-    if len(candidates) == 1:
-        i, _ = candidates[0]
-        appointments_sheet.update_cell(i + 2, 8, "Cancelled")
-        return True
+    # If only one active record — use it directly (no name check needed)
+    if len(active) == 1:
+        return active[0]
 
-    # Multiple active appointments on this phone — use fuzzy name to pick the right one
-    for i, r in candidates:
-        if names_match(r.get("patient_name", ""), name):
-            appointments_sheet.update_cell(i + 2, 8, "Cancelled")
-            return True
+    # Multiple active records — try name match first (most recent match wins)
+    name_matched = [
+        (i, r) for i, r in active
+        if names_match(r.get("patient_name", ""), name)
+    ]
 
-    return False
+    if name_matched:
+        # Return the most recent name match (highest sheet row = last booked)
+        return name_matched[-1]
+
+    # Name match failed but multiple records exist.
+    # As last resort: return the most recent active record.
+    # This handles cases where AI sends wrong/empty name but caller confirmed phone.
+    return active[-1]
 
 
-def reschedule_appointment(name, phone, new_date, new_time):
+def cancel_appointment(name: str, phone: str) -> bool:
     """
-    Reschedule — phone is the PRIMARY identifier. Name is used as a tie-breaker
-    ONLY when the same phone number has multiple active appointments
-    (e.g. family members sharing one phone). If a phone number has just
-    ONE active appointment, it is rescheduled regardless of name spelling —
-    this avoids failures caused by empty/garbled name fields from the voice agent.
+    Cancel the best matching active appointment.
     Sheet columns: id(1) patient_name(2) phone(3) reason(4) doctor(5) date(6) time(7) status(8) timestamp(9)
     """
-    rows = appointments_sheet.get_all_records()
+    i, r = _find_target_row(name, phone)
+    if i is None:
+        return False
+    appointments_sheet.update_cell(i + 2, 8, "Cancelled")
+    return True
+
+
+def reschedule_appointment(name: str, phone: str, new_date: str, new_time: str) -> bool:
+    """
+    Reschedule the best matching active appointment.
+    Sheet columns: id(1) patient_name(2) phone(3) reason(4) doctor(5) date(6) time(7) status(8) timestamp(9)
+    """
+    i, r = _find_target_row(name, phone)
+    if i is None:
+        return False
     normalized_time = normalize_time(new_time)
-    phone_clean = str(phone).strip()
-
-    candidates = [
-        (i, r) for i, r in enumerate(rows)
-        if str(r.get("phone", "")).strip() == phone_clean
-        and r.get("status", "") not in ["Cancelled"]
-    ]
-
-    if not candidates:
-        return False
-
-    if len(candidates) == 1:
-        i, _ = candidates[0]
-        appointments_sheet.update_cell(i + 2, 6, new_date)
-        appointments_sheet.update_cell(i + 2, 7, normalized_time)
-        appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
-        return True
-
-    # Multiple active appointments on this phone — use fuzzy name to pick the right one
-    for i, r in candidates:
-        if names_match(r.get("patient_name", ""), name):
-            appointments_sheet.update_cell(i + 2, 6, new_date)
-            appointments_sheet.update_cell(i + 2, 7, normalized_time)
-            appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
-            return True
-
-    return False
+    appointments_sheet.update_cell(i + 2, 6, new_date)
+    appointments_sheet.update_cell(i + 2, 7, normalized_time)
+    appointments_sheet.update_cell(i + 2, 8, "Rescheduled")
+    return True
 
 
 # ================= AVAILABILITY CHECK =================
 
 def check_availability(doctor_name: str, check_date: str):
-    """
-    Returns set of booked time slots (HH:MM 24h) for a doctor on given date.
-    Used internally by backend for slot filtering.
-    """
     booked = set()
     try:
         rows = appointments_sheet.get_all_records()
