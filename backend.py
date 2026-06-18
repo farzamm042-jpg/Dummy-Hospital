@@ -35,13 +35,11 @@ def normalize_phone(phone: str) -> str:
 
 
 def normalize_time_12h(t: str) -> str:
-    """Any time → HH:MM AM/PM"""
     if not t:
         return t
     import re
     t = str(t).strip()
     t_clean = re.sub(r'\s+', '', t).upper()
-
     quick_map = {
         "8AM": "08:00 AM", "9AM": "09:00 AM", "10AM": "10:00 AM",
         "11AM": "11:00 AM", "12PM": "12:00 PM", "1PM": "01:00 PM",
@@ -56,31 +54,26 @@ def normalize_time_12h(t: str) -> str:
     }
     if t_clean in quick_map:
         return quick_map[t_clean]
-
     for fmt in ["%I:%M %p", "%I:%M%p", "%I %p", "%I%p"]:
         try:
             dt = datetime.strptime(t.upper().strip(), fmt)
             return dt.strftime("%I:%M %p")
         except ValueError:
             pass
-
     try:
         dt = datetime.strptime(t.strip(), "%H:%M")
         return dt.strftime("%I:%M %p")
     except ValueError:
         pass
-
     return t
 
 
 def normalize_time_24h(t: str) -> str:
-    """Any time → HH:MM 24h"""
     if not t:
         return t
     import re
     t = str(t).strip()
     t_clean = re.sub(r'\s+', '', t).upper()
-
     quick_map_24 = {
         "8AM": "08:00", "9AM": "09:00", "10AM": "10:00",
         "11AM": "11:00", "12PM": "12:00", "1PM": "13:00",
@@ -95,37 +88,26 @@ def normalize_time_24h(t: str) -> str:
     }
     if t_clean in quick_map_24:
         return quick_map_24[t_clean]
-
     for fmt in ["%I:%M %p", "%I:%M%p", "%I %p", "%I%p"]:
         try:
             dt = datetime.strptime(t.upper().strip(), fmt)
             return dt.strftime("%H:%M")
         except ValueError:
             pass
-
     if ":" in t and len(t) <= 5:
         try:
             dt = datetime.strptime(t, "%H:%M")
             return dt.strftime("%H:%M")
         except ValueError:
             pass
-
     return t
 
 
 def resolve_date(date_str: str) -> str:
-    """
-    Converts relative/sloppy date phrases into YYYY-MM-DD using the SERVER's
-    real current date — never trusts AI-calculated dates.
-    Falls back to returning the cleaned input if no relative phrase is found,
-    so a properly formatted YYYY-MM-DD still passes straight through.
-    """
     if not date_str:
         return date_str
-
     s = date_str.strip().lower()
     today = date.today()
-
     relative_map = {
         "today": today,
         "tonight": today,
@@ -136,13 +118,8 @@ def resolve_date(date_str: str) -> str:
     }
     if s in relative_map:
         return relative_map[s].strftime("%Y-%m-%d")
-
-    # Already valid YYYY-MM-DD
     try:
         d = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
-        # SAFETY NET: if the AI sent an obviously wrong/past year
-        # (common hallucination, e.g. stuck on training-data year),
-        # but month+day are valid, snap the year forward to a sane value.
         if d.year < today.year:
             try:
                 corrected = d.replace(year=today.year)
@@ -154,15 +131,12 @@ def resolve_date(date_str: str) -> str:
         return date_str.strip()
     except Exception:
         pass
-
-    # Try common alternative formats (DD-MM-YYYY, MM/DD/YYYY, etc.)
     for fmt in ["%d-%m-%Y", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d"]:
         try:
             d = datetime.strptime(date_str.strip(), fmt).date()
             return d.strftime("%Y-%m-%d")
         except Exception:
             continue
-
     return date_str.strip()
 
 
@@ -189,7 +163,6 @@ class Doctor(BaseModel):
     end_time: str
     fee: int
 
-
 class Appointment(BaseModel):
     patient_name: str
     phone: str
@@ -198,18 +171,15 @@ class Appointment(BaseModel):
     date: str
     time: str
 
-
 class Cancel(BaseModel):
     patient_name: str
     phone: str
-
 
 class Reschedule(BaseModel):
     patient_name: str
     phone: str
     new_date: str
     new_time: str
-
 
 class Availability(BaseModel):
     doctor: str
@@ -232,6 +202,7 @@ def get_current_date():
         "tomorrow_human": tomorrow.strftime("%B %d, %Y"),
         "day_after_tomorrow_human": day_after.strftime("%B %d, %Y"),
         "current_year": today.year,
+        "current_time": datetime.now().strftime("%H:%M"),
     }
 
 
@@ -241,23 +212,15 @@ def get_current_date():
 def doctors():
     return get_doctors()
 
-
 @app.post("/add_doctor")
 def add(data: Doctor):
-    add_doctor(
-        data.name, data.specialty, data.days,
-        data.start_time, data.end_time, data.fee
-    )
+    add_doctor(data.name, data.specialty, data.days, data.start_time, data.end_time, data.fee)
     return {"message": "Doctor added successfully", "success": True}
-
 
 @app.post("/delete_doctor")
 def delete(data: Doctor):
     ok = delete_doctor(data.name)
-    return {
-        "message": "Doctor deleted" if ok else "Doctor not found",
-        "success": ok
-    }
+    return {"message": "Doctor deleted" if ok else "Doctor not found", "success": ok}
 
 
 # ================= AVAILABILITY =================
@@ -302,7 +265,7 @@ def availability(data: Availability):
             "message": f"{doctor} is on leave on {d}. Please choose another date."
         }
 
-    # 4. Build slots from doctor's actual hours
+    # 4. Build slots — filter past slots if date is TODAY
     available_slots = []
     if doctor_row:
         try:
@@ -312,8 +275,13 @@ def availability(data: Availability):
             start_h, end_h = 9, 17
 
         booked_set = check_availability(doctor, d)
+        is_today = (d == date.today().strftime("%Y-%m-%d"))
+        current_hour = datetime.now().hour if is_today else 0
 
         for h in range(start_h, end_h):
+            # If today, skip slots that have already passed
+            if is_today and h <= current_hour:
+                continue
             slot_24 = f"{h:02d}:00"
             if slot_24 not in booked_set:
                 slot_12 = normalize_time_12h(slot_24)
@@ -325,6 +293,23 @@ def availability(data: Availability):
         }
 
     if not available_slots:
+        # Check if reason is all slots passed today vs all booked
+        is_today = (d == date.today().strftime("%Y-%m-%d"))
+        if is_today:
+            return {
+                "success": True,
+                "available": False,
+                "doctor": doctor,
+                "date": d,
+                "day": day_name,
+                "available_slots": [],
+                "no_more_slots_today": True,
+                "message": (
+                    f"No more slots available for {doctor} today — "
+                    f"all remaining slots have passed. "
+                    f"Please ask the patient if they'd like to book for tomorrow or another date."
+                )
+            }
         return {
             "success": True,
             "available": False,
@@ -399,10 +384,7 @@ def book(data: Appointment):
 
 @app.post("/cancel_appointment")
 def cancel(data: Cancel):
-    ok = cancel_appointment(
-        normalize_text(data.patient_name),
-        normalize_phone(data.phone)
-    )
+    ok = cancel_appointment(normalize_text(data.patient_name), normalize_phone(data.phone))
     return {
         "success": ok,
         "message": "Appointment cancelled successfully." if ok
@@ -421,7 +403,6 @@ def reschedule(data: Reschedule):
     new_time_12 = normalize_time_12h(data.new_time)
     day_name = get_day_name(new_date)
 
-    # Date validation
     if not validate_date(new_date):
         return {
             "success": False,
